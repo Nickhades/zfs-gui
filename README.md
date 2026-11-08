@@ -16,8 +16,19 @@
                                                         └────────────────────────┘
 ```
 
-![界面总览](docs/screenshot-light.png)
-![数据集对象操作](docs/screenshot-datasets.png)
+## 界面预览
+
+| 存储池 | 数据集 |
+| --- | --- |
+| ![存储池](docs/screenshot-pools.png) | ![数据集](docs/screenshot-datasets.png) |
+| **快照** | **发送 / 接收（实时备份进度）** |
+| ![快照](docs/screenshot-snapshots.png) | ![发送 / 接收](docs/screenshot-sendrecv.png) |
+| **启动环境（bectl）** | **系统（版本 / ARC / 任务日志）** |
+| ![启动环境](docs/screenshot-be.png) | ![系统](docs/screenshot-system.png) |
+| **命令中心（87 项受控操作）** | **操作帮助（全部功能说明）** |
+| ![命令中心](docs/screenshot-command-center.png) | ![操作帮助](docs/screenshot-help.png) |
+
+> 截图使用 Adwaita 浅色主题、全局粗体；界面文字为中文。
 
 ---
 
