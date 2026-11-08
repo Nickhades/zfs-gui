@@ -1,0 +1,40 @@
+#!/bin/sh
+#
+# zfs-gui 特权后台服务 rc.d 脚本（FreeBSD）
+#
+# 安装后启用：
+#   # sysrc zfsguid_enable=YES
+#   # service zfsguid start
+#
+# $FreeBSD$
+#
+
+# PROVIDE: zfsguid
+# REQUIRE: zfs zpool
+# BEFORE: LOGIN
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="zfsguid"
+rcvar="zfsguid_enable"
+desc="ZFS GUI privileged backend"
+
+: ${zfsguid_enable:="NO"}
+: ${zfsguid_config:="/usr/local/etc/zfs-gui.conf"}
+
+command="/usr/local/sbin/zfs-guid"
+pidfile="/var/run/zfs-gui.pid"
+command_args="-c ${zfsguid_config} -p ${pidfile}"
+start_precmd="zfsguid_prestart"
+
+zfsguid_prestart()
+{
+	# 运行目录由守护进程自行创建（0700）
+	if [ ! -f "${zfsguid_config}" ]; then
+		warn "${zfsguid_config} 不存在，将使用内置默认策略（root/wheel）"
+	fi
+}
+
+load_rc_config $name
+run_rc_command "$1"

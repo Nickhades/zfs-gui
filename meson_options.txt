@@ -1,0 +1,2 @@
+option('gui', type: 'feature', value: 'auto',
+  description: '构建 GTK4 图形前端 zfs-gui；关闭后只构建特权守护进程 zfs-guid')

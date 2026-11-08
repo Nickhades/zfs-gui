@@ -1,0 +1,49 @@
+name: zfs-gui
+version: "@VERSION@"
+origin: sysutils/zfs-gui
+comment: "ZFS management GUI for FreeBSD (zpool / zfs / bectl)"
+desc: <<EOD
+A GTK4 desktop application for managing OpenZFS on FreeBSD.
+
+Features:
+ - Storage pool overview with vdev tree, health, scrub and TRIM
+ - Dataset tree with properties, quotas and mount control
+ - Snapshots: recursive/system snapshot, rollback, clone, hold, diff
+ - Send/receive with live backup progress and file picker
+ - Boot environments (bectl)
+ - Command center with 87 whitelisted operations
+ - Privileged daemon + PAM re-authentication for dangerous operations
+ - Chinese help page documenting every feature
+
+The GUI connects to the root daemon zfs-guid over a local UNIX socket.
+Dangerous operations require re-authentication with an administrator
+password (PAM), and every command is validated against a whitelist.
+EOD
+maintainer: "zfs-gui contributors"
+www: "https://github.com/"
+categories: [sysutils]
+licenses: [BSD2CLAUSE]
+prefix: /usr/local
+abi: "@ABI@"
+deps: {
+  gtk4: {
+    origin: "x11-toolkits/gtk40",
+    version: "@GTK4_VERSION@"
+  }
+  glib: {
+    origin: "devel/glib20",
+    version: "@GLIB_VERSION@"
+  }
+}
+message: <<EOD
+ZFS 管理工具已安装。
+
+  服务：sysrc zfsguid_enable=YES 已设置，并已尝试启动
+        service zfsguid status
+  配置：/usr/local/etc/zfs-gui.conf
+  认证：/usr/local/etc/pam.d/zfs-gui
+  程序：zfs-gui（桌面菜单或命令启动）
+
+注意：zfs-guid 必须以 root 运行；普通用户需在 wheel 组，或在
+配置文件的 allowed_users / allowed_groups 中。
+EOD
