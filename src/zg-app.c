@@ -460,6 +460,16 @@ on_probe_done(GObject *source,
 
             if (app->banner_revealer != NULL)
                 gtk_revealer_set_reveal_child(GTK_REVEALER(app->banner_revealer), TRUE);
+
+            {
+                GtkWidget *retry = gtk_button_new_with_label("立即重连");
+
+                gtk_widget_add_css_class(retry, "suggested-action");
+                gtk_widget_set_valign(retry, GTK_ALIGN_CENTER);
+                g_signal_connect_swapped(retry, "clicked",
+                                         G_CALLBACK(zg_app_reconnect), app);
+                gtk_box_append(GTK_BOX(app->banner_content), retry);
+            }
         }
 
         zg_app_set_status(app, "未连接后台服务：请执行 service zfsguid onestart（将自动重试）");
@@ -483,7 +493,17 @@ retry_probe(gpointer data)
     app->retry_source = 0;
 
     if (!app->connected)
-        zg_app_reconnect(app);
+    {
+        if (app->probe_in_flight)
+        {
+            /* 上一次探测迟迟没有回调：保持重试链存活 */
+            app->retry_source = g_timeout_add_seconds(3, retry_probe, app);
+        }
+        else
+        {
+            zg_app_reconnect(app);
+        }
+    }
 
     return G_SOURCE_REMOVE;
 }
@@ -494,8 +514,13 @@ void zg_app_reconnect(ZgApp *app)
         return;
 
     zg_app_set_status(app, "正在连接后台服务 %s …", zg_client_socket_path());
+
     if (app->probe_in_flight)
+    {
+        if (app->retry_source == 0)
+            app->retry_source = g_timeout_add_seconds(3, retry_probe, app);
         return;
+    }
 
     app->probe_in_flight = TRUE;
     zg_client_call_async("system.info", NULL, on_probe_done, app);
