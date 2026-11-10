@@ -10,7 +10,7 @@
 #
 
 # PROVIDE: zfsguid
-# REQUIRE: zfs zpool
+# REQUIRE: zfs zpool var cleanvar
 # BEFORE: LOGIN
 # KEYWORD: shutdown
 
@@ -30,7 +30,13 @@ start_precmd="zfsguid_prestart"
 
 zfsguid_prestart()
 {
-	# 运行目录由守护进程自行创建（0700）
+	# 必须在 cleanvar 之后启动：cleanvar 会清空 /var/run，
+	# 过早启动会导致 pidfile 与 socket 被删除（界面显示“未连接”）。
+	if [ ! -x "${command}" ]; then
+		err 1 "${command} 不存在，请确认 /usr/local 已挂载"
+	fi
+
+	# 运行目录由守护进程自行创建（0711）
 	if [ ! -f "${zfsguid_config}" ]; then
 		warn "${zfsguid_config} 不存在，将使用内置默认策略（root/wheel）"
 	fi

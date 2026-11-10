@@ -376,6 +376,7 @@ ZFS 用户态/内核版本、JSON 输出能力、socket 路径、ARC 命中率�
 | 现象 | 处理 |
 | --- | --- |
 | 顶部提示「未连接后台服务」 | `service zfsguid onestart`；确认 `/usr/local/etc/zfs-gui.conf` 存在 |
+| 开机后长期「未连接」 | 确认 `sysrc zfsguid_enable=YES`；本版本 rc.d 已改为在 `cleanvar` 之后启动（旧版本会因 `/var/run` 被清理而丢失 socket）；`service zfsguid status` 查看状态 |
 | 「拒绝访问：用户 xxx 不在允许列表内」 | 把用户加入 `allowed_groups` 指定的组，或写入 `allowed_users` |
 | 所有操作都报 permission denied | 守护进程不是 root，或 `zfs`/`zpool` 缺少必要权限 |
 | 属性/历史页为空 | 非 root 运行守护进程时，`zpool history`、`zfs userspace` 需要特权 |

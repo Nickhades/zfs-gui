@@ -399,6 +399,7 @@ kstat statistics, plus the task log of every command issued by the UI.
 | Symptom | Fix |
 | --- | --- |
 | "Backend not connected" banner | `service zfsguid onestart`; make sure `/usr/local/etc/zfs-gui.conf` exists |
+| still disconnected after boot | check `sysrc zfsguid_enable=YES`; the rc.d script now starts after `cleanvar` (older versions lost their socket when `/var/run` was cleaned); inspect `service zfsguid status` |
 | "Access denied: user xxx is not allowed" | add the user to the group in `allowed_groups`, or to `allowed_users` |
 | every operation returns permission denied | the daemon is not running as root, or `zfs`/`zpool` lack privileges |
 | properties/history pages are empty | `zpool history` and `zfs userspace` need privileges when the daemon is not root |
