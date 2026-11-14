@@ -1706,30 +1706,102 @@ typedef struct
     GPtrArray *disks;
 } DiskPickerContext;
 
-/* 粗略判断磁盘是否已被某个 ZFS 池使用（vdev 名字通常是 nda0p3 / da0s1a） */
-static gboolean
-disk_used_by_pool(const gchar *status_text,
-                  const gchar *name)
+/* 从 vdev 名称提取磁盘主体：/dev/da0p3 → da0，/dev/nda0 → nda0 */
+static gchar *
+vdev_base_name(const gchar *token)
 {
-    const gchar *p = status_text;
-    gsize len = strlen(name);
+    const gchar *start = token;
+    const gchar *end;
 
-    if (status_text == NULL || name == NULL || name[0] == '\0')
-        return FALSE;
+    if (g_str_has_prefix(start, "/dev/"))
+        start += 5;
 
-    while ((p = strstr(p, name)) != NULL)
+    end = start;
+    while (*end != '\0' && (g_ascii_isalnum(*end) || *end == '_' || *end == '-'))
+        end++;
+
+    if (end == start)
+        return NULL;
+
+    /* 去掉分区后缀：nda0p3 → nda0，da0s1a → da0 */
     {
-        gchar after = p[len];
+        const gchar *p;
 
-        if (after == '\0' || after == ' ' || after == '\n' || after == '\t' ||
-            after == '/' || after == ',' || after == ')' || after == '"' ||
-            after == 'p' || after == 's')
-            return TRUE;
-
-        p += len;
+        for (p = start + 1; p + 1 < end; p++)
+        {
+            if ((*p == 'p' || *p == 's') && g_ascii_isdigit(p[1]))
+            {
+                end = p;
+                break;
+            }
+        }
     }
 
-    return FALSE;
+    return g_strndup(start, (gsize)(end - start));
+}
+
+/* 解析 zpool status，得到「磁盘 → 所属池」映射，避免子串误判
+ * （例如系统盘 nda0 不应被当成外置盘 da0）。 */
+static GHashTable *
+build_disk_pool_map(const gchar *status_text)
+{
+    GHashTable *map = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    gchar **lines;
+    gchar *pool = NULL;
+    guint i;
+
+    if (status_text == NULL)
+        return map;
+
+    lines = g_strsplit(status_text, "\n", -1);
+
+    for (i = 0; lines[i] != NULL; i++)
+    {
+        gchar *line = g_strstrip(lines[i]);
+        gchar **tokens;
+        guint j;
+
+        if (g_str_has_prefix(line, "pool:"))
+        {
+            g_free(pool);
+            pool = g_strdup(g_strstrip(line + 5));
+            continue;
+        }
+
+        if (pool == NULL || line[0] == '\0')
+            continue;
+
+        tokens = g_strsplit_set(line, " \t", -1);
+
+        for (j = 0; tokens[j] != NULL; j++)
+        {
+            gchar *base;
+
+            if (tokens[j][0] == '\0')
+                continue;
+
+            base = vdev_base_name(tokens[j]);
+            if (base == NULL)
+                continue;
+
+            if (g_hash_table_contains(map, base))
+            {
+                g_free(base);
+            }
+            else
+            {
+                /* 键的所有权交给哈希表，不能再 free */
+                g_hash_table_insert(map, base, g_strdup(pool));
+            }
+        }
+
+        g_strfreev(tokens);
+    }
+
+    g_free(pool);
+    g_strfreev(lines);
+
+    return map;
 }
 
 static void
@@ -1783,23 +1855,36 @@ on_create_pool_status(GObject *source,
     {
         guint i;
 
+        GHashTable *disk_pools = build_disk_pool_map(status_text);
+
         for (i = 0; i < context->disks->len; i++)
         {
             ZgDisk *disk = g_ptr_array_index(context->disks, i);
-            gboolean in_use = disk_used_by_pool(status_text, disk->name);
+            const gchar *owner = g_hash_table_lookup(disk_pools, disk->name);
+            gboolean in_use = owner != NULL;
             gchar *size = zg_format_bytes(disk->size);
-            gchar *label = g_strdup_printf(
-                    "/dev/%s — %s%s%s%s", disk->name, size,
-                    disk->descr != NULL ? "，" : "",
-                    disk->descr != NULL ? disk->descr : "",
-                    in_use ? "（使用中，禁止选择）" : "");
-            GtkWidget *check = gtk_check_button_new_with_label(label);
+            gchar *suffix;
+            gchar *label;
+            GtkWidget *check;
+
+            suffix = in_use
+                             ? g_strdup_printf("（使用中：%s，禁止选择）", owner)
+                             : g_strdup("");
+
+            label = g_strdup_printf("/dev/%s — %s%s%s%s", disk->name, size,
+                                    disk->descr != NULL ? "，" : "",
+                                    disk->descr != NULL ? disk->descr : "",
+                                    suffix);
+            check = gtk_check_button_new_with_label(label);
 
             if (in_use)
             {
+                gchar *tip = g_strdup_printf(
+                        "该磁盘属于存储池 %s，请先导出或销毁该池后再使用", owner);
+
                 gtk_widget_set_sensitive(check, FALSE);
-                gtk_widget_set_tooltip_text(
-                        check, "该磁盘已被 ZFS 池使用（可能包含系统盘），禁止在此选择");
+                gtk_widget_set_tooltip_text(check, tip);
+                g_free(tip);
             }
             else
             {
@@ -1813,8 +1898,11 @@ on_create_pool_status(GObject *source,
             gtk_box_append(GTK_BOX(box), check);
 
             g_free(size);
+            g_free(suffix);
             g_free(label);
         }
+
+        g_hash_table_destroy(disk_pools);
 
         if (context->disks->len == 0)
             gtk_box_append(GTK_BOX(box),
