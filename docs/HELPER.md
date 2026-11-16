@@ -125,3 +125,50 @@ SCM_RIGHTS: ALL PASS
 6. 所有 fd 均带 `O_CLOEXEC`，避免 exec 继承
 
 下一步在 Helper 协议中加入 `send_stream` / `receive_stream` 两种消息。
+
+## 9. send_stream 已打通（Helper 侧）
+
+Helper 新增 `send_stream`：
+
+1. 客户端发送 JSON 帧：`{"op":"send_stream","snapshot":"pool/ds@snap"}`
+2. 客户端紧接着用 `sendmsg` 发送 1 字节 + SCM_RIGHTS 文件 fd
+3. Helper 用 `recvmsg(MSG_CMSG_CLOEXEC)` 接收，检查 `MSG_CTRUNC`
+4. Helper fork 子进程，`dup2(fd, STDOUT)` 后执行 `zfs send snapshot`
+5. 完成后回传 `{ok, message}`
+
+实测：
+
+```
+请求 send_stream zgtest/data@s1
+fd = /tmp/zgstream.zfs（O_WRONLY|O_CREAT|O_TRUNC, 0600）
+应答 {'ok': True, 'code': 0}
+文件大小 47,400 字节
+zfs receive zgtest/recv < /tmp/zgstream.zfs  → 成功
+zgtest/recv@s1 出现
+```
+
+说明 fd 传递、Helper 写流、流内容有效性全部验证通过。
+
+### 主进程接入的下一个障碍
+
+主守护进程在 `cap_enter()` 后**无法按路径打开输出文件**，因此不能在
+`zfs.send` 请求到达时自己 `open(io_path)`。
+
+可行方案：
+
+1. **GUI 打开文件并把 fd 传给守护进程**（推荐）
+   - GUI 是普通用户，打开文件只受用户权限约束，不需要 root
+   - 客户端协议增加 SCM_RIGHTS：GUI → zfs-guid → Helper
+   - 守护进程不再接触路径，路径穿越风险消失
+2. Helper 根据路径打开文件
+   - 简单，但把用户路径交给 root Helper，需要更严格的校验
+3. 主进程预打开目录 fd + openat
+   - 只适合固定目录，不适合任意备份路径
+
+建议采用方案 1：下一步给 GUI↔守护进程协议加 fd 传递。
+
+### 尚未实现
+
+- `receive_stream`（方向相反，fd 由 GUI 打开后传给 Helper）
+- 取消：客户端断开时 Helper 通过 socket EOF 终止 `zfs send`
+- 进度/状态机：目前 Helper 连接同步等待，长流会占用一个连接槽
