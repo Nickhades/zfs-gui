@@ -505,10 +505,6 @@ option_label(const gchar *key)
 /* 管理员密码二次验证                                                         */
 /* ------------------------------------------------------------------------- */
 
-typedef void (*ZgPasswordFunc)(const gchar *username,
-                               const gchar *password,
-                               gpointer data);
-
 typedef struct
 {
     GtkWidget *window;
@@ -597,15 +593,14 @@ on_password_visibility(GtkToggleButton *toggle,
                              gtk_toggle_button_get_active(toggle));
 }
 
-static void
-zg_dialogs_password(GtkWindow *parent,
-                    const gchar *op_id,
-                    const gchar *args_json,
-                    const gchar *error_text,
-                    ZgPasswordFunc callback,
-                    gpointer data,
-                    GDestroyNotify cancel_cleanup,
-                    gpointer cancel_data)
+void zg_dialogs_password(GtkWindow *parent,
+                         const gchar *op_id,
+                         const gchar *args_json,
+                         const gchar *error_text,
+                         ZgPasswordFunc callback,
+                         gpointer data,
+                         GDestroyNotify cancel_cleanup,
+                         gpointer cancel_data)
 {
     const ZgOpDef *op = zg_op_lookup(op_id);
     PasswordDialog *dialog = g_new0(PasswordDialog, 1);
