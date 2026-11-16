@@ -475,6 +475,7 @@ build_snapshot_selector(SendRecvPage *page)
     gtk_box_append(GTK_BOX(box), scrolled);
 
     page->snapshot_popover = gtk_popover_new();
+    gtk_widget_add_css_class(page->snapshot_popover, "zg-snapshot-popover");
     gtk_popover_set_has_arrow(GTK_POPOVER(page->snapshot_popover), FALSE);
     gtk_popover_set_child(GTK_POPOVER(page->snapshot_popover), box);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(button),
