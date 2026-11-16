@@ -11,6 +11,7 @@
 #include "zg-app.h"
 #include "zg-client.h"
 #include "zg-dialogs.h"
+#include "zg-libzfs.h"
 #include "zg-model.h"
 #include "zg-pages.h"
 #include "zg-ui.h"
@@ -38,6 +39,8 @@ typedef struct
 
     GtkTextBuffer *output_buffer;
     GtkWidget *progress;
+    GtkWidget *send_button;
+    GtkWidget *recv_button;
 } SendRecvPage;
 
 /* ------------------------------------------------------------------------- */
@@ -102,6 +105,11 @@ on_execute_done(GObject *source,
     zg_app_set_status(context->page->app, "%s %s", context->command,
                       (response != NULL && response->ok) ? "已完成" : "失败");
 
+    if (context->page->send_button != NULL)
+        gtk_widget_set_sensitive(context->page->send_button, TRUE);
+    if (context->page->recv_button != NULL)
+        gtk_widget_set_sensitive(context->page->recv_button, TRUE);
+
     if (context->page->progress != NULL)
     {
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(context->page->progress), 0.0);
@@ -161,6 +169,11 @@ execute_stream(SendRecvPage *page,
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress), 0.0);
         gtk_widget_set_visible(page->progress, TRUE);
     }
+
+    if (page->send_button != NULL)
+        gtk_widget_set_sensitive(page->send_button, FALSE);
+    if (page->recv_button != NULL)
+        gtk_widget_set_sensitive(page->recv_button, FALSE);
 
     zg_app_set_status(page->app, "正在执行 %s …", command);
     zg_client_call_stream_async(op_id, json, file_path, for_write,
@@ -266,11 +279,63 @@ on_snapshot_list(GObject *source,
     zg_client_result_free(response);
 }
 
+static gboolean
+populate_snapshots_local(SendRecvPage *page)
+{
+    GPtrArray *snapshots = zg_libzfs_snapshots();
+    gchar *keep = g_strdup(page->selected_snapshot);
+    guint i;
+    guint target = 0;
+    gboolean found = FALSE;
+
+    if (snapshots == NULL || snapshots->len == 0)
+    {
+        if (snapshots != NULL)
+            g_ptr_array_free(snapshots, TRUE);
+        g_free(keep);
+        return FALSE;
+    }
+
+    while (g_list_model_get_n_items(G_LIST_MODEL(page->snapshots)) > 0)
+        gtk_string_list_remove(page->snapshots, 0);
+
+    for (i = 0; i < snapshots->len; i++)
+    {
+        ZgSnapshot *snapshot = g_ptr_array_index(snapshots, i);
+
+        gtk_string_list_append(page->snapshots, snapshot->name);
+    }
+
+    for (i = 0; i < snapshots->len; i++)
+    {
+        ZgSnapshot *snapshot = g_ptr_array_index(snapshots, i);
+
+        if (keep != NULL && g_strcmp0(snapshot->name, keep) == 0)
+        {
+            target = i;
+            found = TRUE;
+            break;
+        }
+    }
+
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(page->send_snapshot),
+                               found ? target : 0);
+
+    for (i = 0; i < snapshots->len; i++)
+        zg_model_snapshot_free(g_ptr_array_index(snapshots, i));
+    g_ptr_array_free(snapshots, TRUE);
+    g_free(keep);
+    return TRUE;
+}
+
 static void
 sendrecv_refresh(gpointer data)
 {
     SendRecvPage *page = data;
     ZgArgs *args;
+
+    if (populate_snapshots_local(page))
+        return;
 
     if (!zg_app_is_connected(page->app))
         return;
@@ -590,6 +655,7 @@ build_send_group(SendRecvPage *page)
     gtk_box_append(GTK_BOX(frame), page->send_dryrun);
 
     button = zg_ui_button("开始发送", G_CALLBACK(on_send_clicked), page);
+    page->send_button = button;
     gtk_widget_add_css_class(button, "suggested-action");
     gtk_widget_set_halign(button, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(frame), button);
@@ -648,6 +714,7 @@ build_receive_group(SendRecvPage *page)
     gtk_box_append(GTK_BOX(frame), page->recv_dryrun);
 
     button = zg_ui_button("开始接收", G_CALLBACK(on_receive_clicked), page);
+    page->recv_button = button;
     gtk_widget_add_css_class(button, "suggested-action");
     gtk_widget_set_halign(button, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(frame), button);
