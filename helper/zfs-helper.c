@@ -393,24 +393,46 @@ run_receive_stream(int control_fd,
                    const gchar *target,
                    int in_fd,
                    gboolean force,
-                   gboolean *canceled)
+                   guint32 req_id,
+                   gboolean *canceled,
+                   gboolean *ok)
 {
+    int pipefd[2];
     pid_t pid;
     int status = 0;
     gboolean stop = FALSE;
+    gboolean source_eof = FALSE;
+    gboolean pipe_open = TRUE;
+    guint64 total = 0;
+    guint64 last_report = 0;
+    gint64 last_time = g_get_monotonic_time();
+    char buffer[64 * 1024];
+    gsize pending = 0;
+    gsize pending_off = 0;
 
     *canceled = FALSE;
+    *ok = FALSE;
+
+    if (pipe(pipefd) != 0)
+        return g_strdup(g_strerror(errno));
 
     pid = fork();
     if (pid < 0)
+    {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        close(in_fd);
         return g_strdup(g_strerror(errno));
+    }
 
     if (pid == 0)
     {
-        if (dup2(in_fd, STDIN_FILENO) < 0)
+        (void)setpgid(0, 0);
+        if (dup2(pipefd[0], STDIN_FILENO) < 0)
             _exit(126);
 
-        close(in_fd);
+        close(pipefd[0]);
+        close(pipefd[1]);
 
         if (force)
             execl("/sbin/zfs", "zfs", "receive", "-F", target, (char *)NULL);
@@ -420,49 +442,140 @@ run_receive_stream(int control_fd,
         _exit(127);
     }
 
-    close(in_fd);
+    close(pipefd[0]);
+    (void)fcntl(pipefd[1], F_SETFL, O_NONBLOCK);
 
     while (!stop)
     {
-        struct pollfd pfd;
+        struct pollfd pfd[3];
+        int nfds = 1;
         int ready;
-        pid_t done;
 
-        pfd.fd = control_fd;
-        pfd.events = POLLIN | POLLHUP;
-        pfd.revents = 0;
+        pfd[0].fd = control_fd;
+        pfd[0].events = POLLIN | POLLHUP;
+        pfd[0].revents = 0;
 
-        ready = poll(&pfd, 1, 100);
-
-        if (ready > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR)))
+        if (!source_eof && pending == 0)
         {
-            char buffer[64];
-
-            (void)recv(control_fd, buffer, sizeof(buffer), MSG_DONTWAIT);
-            *canceled = TRUE;
-            stop = TRUE;
+            pfd[nfds].fd = in_fd;
+            pfd[nfds].events = POLLIN;
+            pfd[nfds].revents = 0;
+            nfds++;
         }
 
-        done = waitpid(pid, &status, WNOHANG);
-        if (done == pid)
-            break;
-
-        if (stop)
+        if (pipe_open && pending > 0)
         {
-            kill(pid, SIGTERM);
-            waitpid(pid, &status, 0);
+            pfd[nfds].fd = pipefd[1];
+            pfd[nfds].events = POLLOUT;
+            pfd[nfds].revents = 0;
+            nfds++;
+        }
+
+        ready = poll(pfd, (nfds_t)nfds, 200);
+        if (ready < 0 && errno == EINTR)
+            continue;
+
+        if (ready > 0 && (pfd[0].revents & (POLLIN | POLLHUP | POLLERR)))
+        {
+            char tmp[64];
+
+            (void)recv(control_fd, tmp, sizeof(tmp), MSG_DONTWAIT);
+            *canceled = TRUE;
+            stop = TRUE;
             break;
+        }
+
+        if (ready > 0 && !source_eof && pending == 0 && nfds > 1 &&
+            (pfd[1].revents & (POLLIN | POLLHUP)))
+        {
+            ssize_t n = read(in_fd, buffer, sizeof(buffer));
+
+            if (n > 0)
+            {
+                pending = (gsize)n;
+                pending_off = 0;
+            }
+            else if (n == 0)
+            {
+                source_eof = TRUE;
+            }
+            else if (errno != EAGAIN && errno != EINTR)
+            {
+                *canceled = TRUE;
+                stop = TRUE;
+                break;
+            }
+        }
+
+        if (pending > 0 && pipe_open)
+        {
+            ssize_t n = write(pipefd[1], buffer + pending_off, pending);
+
+            if (n > 0)
+            {
+                pending_off += (gsize)n;
+                pending -= (gsize)n;
+                total += (guint64)n;
+
+                if (pending == 0)
+                    pending_off = 0;
+
+                if (total - last_report >= 8 * 1024 * 1024 ||
+                    g_get_monotonic_time() - last_time >= 1000 * 1000)
+                {
+                    send_progress(control_fd, req_id, total);
+                    last_report = total;
+                    last_time = g_get_monotonic_time();
+                }
+            }
+            else if (n < 0 && errno == EAGAIN)
+            {
+                /* 等下一次 POLLOUT */
+            }
+            else if (n < 0 && errno == EINTR)
+            {
+                /* 重试 */
+            }
+            else
+            {
+                /* 子进程提前退出，EPIPE */
+                break;
+            }
+        }
+
+        if (source_eof && pending == 0 && pipe_open)
+        {
+            close(pipefd[1]);
+            pipe_open = FALSE;
+        }
+
+        {
+            pid_t done = waitpid(pid, &status, WNOHANG);
+
+            if (done == pid)
+                break;
         }
     }
 
-    if (*canceled)
+    if (pipe_open)
+        close(pipefd[1]);
+    close(in_fd);
+
+    if (stop)
+    {
+        kill(-pid, SIGTERM);
+        waitpid(pid, &status, 0);
         return g_strdup("zfs receive 已取消");
+    }
+
+    waitpid(pid, &status, 0);
 
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         return g_strdup_printf("zfs receive 失败（exit=%d）",
                                WIFEXITED(status) ? WEXITSTATUS(status) : -1);
 
-    return NULL;
+    *ok = TRUE;
+    return g_strdup_printf("已接收 %" G_GUINT64_FORMAT " 字节", total);
 }
 
 static void
@@ -540,9 +653,12 @@ handle_client(int fd)
 
             {
                 gboolean canceled = FALSE;
+                gboolean ok = FALSE;
+                gint64 req_id = zg_json_object_get_int(root, "req_id", 0);
 
-                message = run_receive_stream(fd, target, in_fd, force, &canceled);
-                send_response(fd, message == NULL, message);
+                message = run_receive_stream(fd, target, in_fd, force,
+                                             (guint32)req_id, &canceled, &ok);
+                send_response(fd, ok && !canceled, message);
                 if (canceled)
                     break;
             }
