@@ -109,6 +109,19 @@ void zg_dialogs_send_snapshot(GtkWindow *parent,
                               gpointer data);
 
 /* 由页面模块复用的工具函数 */
+typedef void (*ZgPasswordFunc)(const gchar *username,
+                               const gchar *password,
+                               gpointer data);
+
+void zg_dialogs_password(GtkWindow *parent,
+                         const gchar *op_id,
+                         const gchar *args_json,
+                         const gchar *error_text,
+                         ZgPasswordFunc callback,
+                         gpointer data,
+                         GDestroyNotify cancel_cleanup,
+                         gpointer cancel_data);
+
 gchar *zg_dialogs_describe_args(const gchar *op_id,
                                 const gchar *args_json);
 GtkWindow *zg_dialogs_window_new(GtkWindow *parent,

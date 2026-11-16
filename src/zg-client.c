@@ -617,6 +617,8 @@ typedef struct
     gboolean for_write;
     ZgClientProgressFunc progress;
     gpointer progress_data;
+    gchar *auth_user;
+    gchar *auth_password;
 } StreamCall;
 
 typedef struct
@@ -649,6 +651,14 @@ stream_call_free(gpointer data)
     g_free(call->op);
     g_free(call->args_json);
     g_free(call->file_path);
+    g_free(call->auth_user);
+
+    if (call->auth_password != NULL)
+    {
+        explicit_bzero(call->auth_password, strlen(call->auth_password));
+        g_free(call->auth_password);
+    }
+
     g_free(call);
 }
 
@@ -712,6 +722,16 @@ perform_stream_call(const StreamCall *call,
                                    : "{}");
     zg_json_writer_set_bool(writer, "has_fd", TRUE);
     zg_json_writer_set_bool(writer, "progress", TRUE);
+
+    if (call->auth_user != NULL && call->auth_user[0] != '\0')
+    {
+        zg_json_writer_begin_object(writer, ZG_KEY_AUTH);
+        zg_json_writer_set_string(writer, ZG_KEY_AUTH_USER, call->auth_user);
+        zg_json_writer_set_string(writer, ZG_KEY_AUTH_PASS,
+                                  call->auth_password != NULL ? call->auth_password : "");
+        zg_json_writer_end_object(writer);
+    }
+
     zg_json_writer_end_object(writer);
     request = zg_json_writer_to_string(writer, &request_length);
 
@@ -836,14 +856,16 @@ stream_call_thread(GTask *task,
         g_task_return_pointer(task, result, (GDestroyNotify)zg_client_result_free);
 }
 
-void zg_client_call_stream_async(const gchar *op,
-                                 gchar *args_json,
-                                 const gchar *file_path,
-                                 gboolean for_write,
-                                 ZgClientProgressFunc progress,
-                                 gpointer progress_data,
-                                 GAsyncReadyCallback callback,
-                                 gpointer user_data)
+void zg_client_call_stream_async_auth(const gchar *op,
+                                      gchar *args_json,
+                                      const gchar *file_path,
+                                      gboolean for_write,
+                                      const gchar *username,
+                                      const gchar *password,
+                                      ZgClientProgressFunc progress,
+                                      gpointer progress_data,
+                                      GAsyncReadyCallback callback,
+                                      gpointer user_data)
 {
     GTask *task;
     StreamCall *call;
@@ -858,10 +880,26 @@ void zg_client_call_stream_async(const gchar *op,
     call->for_write = for_write;
     call->progress = progress;
     call->progress_data = progress_data;
+    call->auth_user = g_strdup(username);
+    call->auth_password = g_strdup(password);
 
     task = g_task_new(NULL, NULL, callback, user_data);
     g_task_set_source_tag(task, (gpointer)zg_client_call_stream_async);
     g_task_set_task_data(task, call, stream_call_free);
     g_task_run_in_thread(task, stream_call_thread);
     g_object_unref(task);
+}
+
+void zg_client_call_stream_async(const gchar *op,
+                                 gchar *args_json,
+                                 const gchar *file_path,
+                                 gboolean for_write,
+                                 ZgClientProgressFunc progress,
+                                 gpointer progress_data,
+                                 GAsyncReadyCallback callback,
+                                 gpointer user_data)
+{
+    zg_client_call_stream_async_auth(op, args_json, file_path, for_write,
+                                     NULL, NULL, progress, progress_data,
+                                     callback, user_data);
 }

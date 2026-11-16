@@ -13,6 +13,7 @@
 #include "zg-dialogs.h"
 #include "zg-libzfs.h"
 #include "zg-model.h"
+#include "zg-opdef.h"
 #include "zg-pages.h"
 #include "zg-ui.h"
 #include "zg-util.h"
@@ -194,19 +195,43 @@ on_cancel_clicked(GtkButton *button,
     zg_client_cancel_stream();
 }
 
-static void
-execute_stream(SendRecvPage *page,
-               const gchar *op_id,
-               ZgArgs *args,
-               const gchar *file_path,
-               gboolean for_write)
+typedef struct
 {
-    gchar *json = zg_args_to_json(args);
-    gchar *command = zg_dialogs_describe_args(op_id, json);
+    SendRecvPage *page;
+    gchar *op_id;
+    gchar *json;
+    gchar *file_path;
+    gchar *command;
+    gboolean for_write;
+} StreamStart;
+
+static void
+stream_start_free(StreamStart *start)
+{
+    if (start == NULL)
+        return;
+
+    g_free(start->op_id);
+    g_free(start->json);
+    g_free(start->file_path);
+    g_free(start->command);
+    g_free(start);
+}
+
+static void
+execute_stream_go(SendRecvPage *page,
+                  const gchar *op_id,
+                  gchar *json,
+                  const gchar *file_path,
+                  gboolean for_write,
+                  const gchar *username,
+                  const gchar *password,
+                  const gchar *command)
+{
     ExecContext *context = g_new0(ExecContext, 1);
 
     context->page = page;
-    context->command = command;
+    context->command = g_strdup(command);
 
     {
         gchar *notice = g_strdup_printf("\n正在执行：%s\n", command);
@@ -239,9 +264,57 @@ execute_stream(SendRecvPage *page,
         gtk_widget_set_sensitive(page->recv_button, FALSE);
 
     zg_app_set_status(page->app, "正在执行 %s …", command);
-    zg_client_call_stream_async(op_id, json, file_path, for_write,
-                                on_stream_progress, page,
-                                on_execute_done, context);
+    zg_client_call_stream_async_auth(op_id, json, file_path, for_write,
+                                     username, password,
+                                     on_stream_progress, page,
+                                     on_execute_done, context);
+}
+
+static void
+on_stream_password(const gchar *username,
+                   const gchar *password,
+                   gpointer data)
+{
+    StreamStart *start = data;
+
+    execute_stream_go(start->page, start->op_id, g_strdup(start->json),
+                      start->file_path, start->for_write, username, password,
+                      start->command);
+    stream_start_free(start);
+}
+
+static void
+execute_stream(SendRecvPage *page,
+               const gchar *op_id,
+               ZgArgs *args,
+               const gchar *file_path,
+               gboolean for_write)
+{
+    gchar *json = zg_args_to_json(args);
+    gchar *command = zg_dialogs_describe_args(op_id, json);
+    const ZgOpDef *op = zg_op_lookup(op_id);
+
+    if (op != NULL && zg_op_requires_password(op, zg_app_auth_mode(page->app)))
+    {
+        StreamStart *start = g_new0(StreamStart, 1);
+        GtkWindow *window = GTK_WINDOW(gtk_widget_get_root(page->root));
+
+        start->page = page;
+        start->op_id = g_strdup(op_id);
+        start->json = json;
+        start->file_path = g_strdup(file_path);
+        start->for_write = for_write;
+        start->command = command;
+
+        zg_dialogs_password(window, op_id, json, NULL,
+                            on_stream_password, start,
+                            (GDestroyNotify)stream_start_free, start);
+        return;
+    }
+
+    execute_stream_go(page, op_id, json, file_path, for_write, NULL, NULL,
+                      command);
+    g_free(command);
 }
 
 /* ------------------------------------------------------------------------- */
