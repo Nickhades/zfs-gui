@@ -742,6 +742,7 @@ build_send_group(SendRecvPage *page)
     page->send_snapshot = gtk_drop_down_new(G_LIST_MODEL(page->snapshots), NULL);
     gtk_drop_down_set_enable_search(GTK_DROP_DOWN(page->send_snapshot), TRUE);
     gtk_widget_set_hexpand(page->send_snapshot, TRUE);
+    gtk_widget_set_focusable(page->send_snapshot, FALSE);
     {
         GtkWidget *snapshot_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         GtkWidget *refresh = gtk_button_new_from_icon_name("zg-refresh-symbolic");
@@ -773,6 +774,7 @@ build_send_group(SendRecvPage *page)
     }
 
     page->send_mode = gtk_drop_down_new_from_strings(modes);
+    gtk_widget_set_focusable(page->send_mode, FALSE);
     zg_dialogs_add_field(grid, &row, "模式", page->send_mode, NULL);
 
     page->send_base = gtk_entry_new();
