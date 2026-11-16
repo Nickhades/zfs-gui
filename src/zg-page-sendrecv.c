@@ -858,6 +858,21 @@ build_receive_group(SendRecvPage *page)
     return frame;
 }
 
+static void
+sendrecv_page_destroy(GtkWidget *widget,
+                      gpointer user_data)
+{
+    SendRecvPage *page = user_data;
+
+    (void)widget;
+
+    if (page->progress_timer != 0)
+    {
+        g_source_remove(page->progress_timer);
+        page->progress_timer = 0;
+    }
+}
+
 GtkWidget *
 zg_page_sendrecv_new(ZgApp *app)
 {
@@ -916,6 +931,9 @@ zg_page_sendrecv_new(ZgApp *app)
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), content);
 
     page->root = scrolled;
+
+    g_signal_connect(page->root, "destroy",
+                     G_CALLBACK(sendrecv_page_destroy), page);
 
     g_object_set_data_full(G_OBJECT(page->root), "zg-page-sendrecv", page, g_free);
 
