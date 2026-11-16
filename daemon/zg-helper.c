@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "zg-json.h"
+#include "zg-progress.h"
 
 #define ZG_HELPER_SOCKET_DEFAULT "/var/run/zfs-gui/zfs-helper.sock"
 
@@ -316,18 +317,20 @@ zg_helper_send_stream(const gchar *snapshot,
 
     g_free(text);
 
-    if (!read_full(helper_fds[helper_slot], &length, sizeof(length)))
-        return helper_outcome(FALSE, "读取 Helper send_stream 应答失败");
-
-    length = g_ntohl(length);
-    if (length == 0 || length > 64 * 1024)
-        return helper_outcome(FALSE, "Helper send_stream 应答非法");
-
+    for (;;)
     {
-        gchar *response = g_malloc0((gsize)length + 1);
-        GError *error = NULL;
         ZgJson *root;
-        ZgOpOutcome *outcome;
+        GError *error = NULL;
+        gchar *response;
+
+        if (!read_full(helper_fds[helper_slot], &length, sizeof(length)))
+            return helper_outcome(FALSE, "读取 Helper send_stream 应答失败");
+
+        length = g_ntohl(length);
+        if (length == 0 || length > 64 * 1024)
+            return helper_outcome(FALSE, "Helper send_stream 应答非法");
+
+        response = g_malloc0((gsize)length + 1);
 
         if (!read_full(helper_fds[helper_slot], response, length))
         {
@@ -340,17 +343,28 @@ zg_helper_send_stream(const gchar *snapshot,
 
         if (root == NULL)
         {
-            outcome = helper_outcome(FALSE,
-                                     error != NULL ? error->message : "Helper 应答解析失败");
+            ZgOpOutcome *outcome = helper_outcome(
+                    FALSE, error != NULL ? error->message : "Helper 应答解析失败");
+
             g_clear_error(&error);
             return outcome;
         }
 
-        outcome = helper_outcome(
-                zg_json_object_get_bool(root, "ok", FALSE),
-                zg_json_object_get_string(root, "message"));
-        zg_json_free(root);
-        return outcome;
+        if (g_strcmp0(zg_json_object_get_string(root, "type"), "progress") == 0)
+        {
+            zg_progress_report((guint64)zg_json_object_get_int(root, "bytes", 0));
+            zg_json_free(root);
+            continue;
+        }
+
+        {
+            ZgOpOutcome *outcome = helper_outcome(
+                    zg_json_object_get_bool(root, "ok", FALSE),
+                    zg_json_object_get_string(root, "message"));
+
+            zg_json_free(root);
+            return outcome;
+        }
     }
 }
 
