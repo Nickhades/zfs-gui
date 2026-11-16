@@ -167,11 +167,35 @@ zgtest/recv@s1 出现
 
 建议采用方案 1：下一步给 GUI↔守护进程协议加 fd 传递。
 
+### 进度回报（已实现）
+
+Helper 使用 Proxy FD：
+
+1. `zfs send` 写入 pipe
+2. Helper 从 pipe 读，写入最终 fd，同时累计字节
+3. 每 8MB 或 1 秒发送一个 JSON progress 帧：
+   `{"type":"progress","req_id":N,"bytes":M}`
+4. 最终帧仍是普通应答
+
+Daemon 在客户端请求带 `"progress": true` 时，把 progress 帧转发给客户端。
+实测 32MB 流：
+
+```
+PROGRESS 8409152 bytes
+PROGRESS 16811800 bytes
+PROGRESS 25216944 bytes
+PROGRESS 33637376 bytes
+{"ok": true, "message": "已发送 33682504 字节"}
+```
+
+GUI 尚未接入，CLI 测试程序已能接收进度。
+
 ### 尚未实现
 
-- `receive_stream`（方向相反，fd 由 GUI 打开后传给 Helper）
-- 取消：客户端断开时 Helper 通过 socket EOF 终止 `zfs send`
-- 进度/状态机：目前 Helper 连接同步等待，长流会占用一个连接槽
+- 二进制协议：控制通道仍是 JSON 帧（二进制 `zfs_req_header` 方案见第 12 节）
+- req_id 精确取消：Helper 已带 req_id，但 CANCEL 仍依赖连接 EOF/任意字节
+- `receive_stream` 的 PROGRESS
+- GUI 前端进度条
 
 ## 10. GUI → Daemon → Helper 全链路（send_stream）
 

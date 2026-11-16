@@ -28,6 +28,7 @@ def main() -> int:
         "v": 1,
         "op": "zfs.send",
         "has_fd": True,
+        "progress": True,
         "args": {"positional": [snapshot], "output": output},
     }
     payload = json.dumps(request).encode()
@@ -40,14 +41,20 @@ def main() -> int:
     finally:
         os.close(fd)
 
-    length = struct.unpack(">I", s.recv(4))[0]
-    body = b""
-    while len(body) < length:
-        body += s.recv(length - len(body))
+    while True:
+        length = struct.unpack(">I", s.recv(4))[0]
+        body = b""
+        while len(body) < length:
+            body += s.recv(length - len(body))
 
-    response = json.loads(body)
-    print(json.dumps(response, ensure_ascii=False))
-    return 0 if response.get("ok") else 1
+        response = json.loads(body)
+
+        if response.get("type") == "progress":
+            print("PROGRESS %d bytes" % response.get("bytes", 0))
+            continue
+
+        print(json.dumps(response, ensure_ascii=False))
+        return 0 if response.get("ok") else 1
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@
 #include "zg-json.h"
 #include "zg-helper.h"
 #include "zg-libzfs-exec.h"
+#include "zg-progress.h"
 #include "zg-log.h"
 #include "zg-opdef.h"
 #include "zg-ops.h"
@@ -499,7 +500,12 @@ handle_client(int fd,
         g_free(description);
     }
 
+    if (zg_json_object_get_bool(root, "progress", FALSE))
+        zg_progress_begin(fd);
+
     outcome = zg_op_execute(op, request, policy);
+
+    zg_progress_end();
 
     if (outcome == NULL)
     {

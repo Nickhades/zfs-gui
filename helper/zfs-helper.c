@@ -227,76 +227,162 @@ recv_stream_fd(int sock)
     return fd;
 }
 
+static void
+send_progress(int control_fd,
+              guint32 req_id,
+              guint64 bytes)
+{
+    ZgJsonWriter *writer = zg_json_writer_new();
+    gchar *text;
+    guint32 length;
+
+    zg_json_writer_begin_object(writer, NULL);
+    zg_json_writer_set_string(writer, "type", "progress");
+    zg_json_writer_set_int(writer, "req_id", (gint64)req_id);
+    zg_json_writer_set_int(writer, "bytes", (gint64)bytes);
+    zg_json_writer_end_object(writer);
+    text = zg_json_writer_to_string(writer, NULL);
+
+    length = g_htonl((guint32)strlen(text));
+    (void)write_full(control_fd, &length, sizeof(length));
+    (void)write_full(control_fd, text, strlen(text));
+    g_free(text);
+}
+
 static gchar *
 run_send_stream(int control_fd,
                 const gchar *snapshot,
                 int out_fd,
+                guint32 req_id,
                 gboolean *canceled)
 {
+    int pipefd[2];
     pid_t pid;
     int status = 0;
+    guint64 total = 0;
+    guint64 last_report = 0;
+    gint64 last_time = g_get_monotonic_time();
+    char buffer[64 * 1024];
     gboolean stop = FALSE;
 
     *canceled = FALSE;
 
+    if (pipe(pipefd) != 0)
+        return g_strdup(g_strerror(errno));
+
     pid = fork();
     if (pid < 0)
+    {
+        close(pipefd[0]);
+        close(pipefd[1]);
         return g_strdup(g_strerror(errno));
+    }
 
     if (pid == 0)
     {
-        if (dup2(out_fd, STDOUT_FILENO) < 0)
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0)
             _exit(126);
 
-        close(out_fd);
+        close(pipefd[0]);
+        close(pipefd[1]);
         execl("/sbin/zfs", "zfs", "send", snapshot, (char *)NULL);
         _exit(127);
     }
 
-    close(out_fd);
+    close(pipefd[1]);
 
     while (!stop)
     {
-        struct pollfd pfd;
+        struct pollfd fds[2];
         int ready;
         pid_t done;
 
-        pfd.fd = control_fd;
-        pfd.events = POLLIN | POLLHUP;
-        pfd.revents = 0;
+        fds[0].fd = control_fd;
+        fds[0].events = POLLIN | POLLHUP;
+        fds[0].revents = 0;
+        fds[1].fd = pipefd[0];
+        fds[1].events = POLLIN | POLLHUP;
+        fds[1].revents = 0;
 
-        ready = poll(&pfd, 1, 100);
+        ready = poll(fds, 2, 200);
+        if (ready < 0 && errno == EINTR)
+            continue;
 
-        if (ready > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR)))
+        if (ready > 0 && (fds[0].revents & (POLLIN | POLLHUP | POLLERR)))
         {
-            char buffer[64];
+            char tmp[64];
 
-            /* 客户端发来 CANCEL 或直接断开：两者都终止发送 */
-            (void)recv(control_fd, buffer, sizeof(buffer), MSG_DONTWAIT);
+            (void)recv(control_fd, tmp, sizeof(tmp), MSG_DONTWAIT);
             *canceled = TRUE;
             stop = TRUE;
         }
 
+        if (ready > 0 && (fds[1].revents & (POLLIN | POLLHUP | POLLERR)))
+        {
+            ssize_t n = read(pipefd[0], buffer, sizeof(buffer));
+
+            if (n > 0)
+            {
+                if (!write_full(out_fd, buffer, (gsize)n))
+                {
+                    stop = TRUE;
+                    *canceled = TRUE;
+                    break;
+                }
+
+                total += (guint64)n;
+
+                if (total - last_report >= 8 * 1024 * 1024 ||
+                    g_get_monotonic_time() - last_time >= 1000 * 1000)
+                {
+                    send_progress(control_fd, req_id, total);
+                    last_report = total;
+                    last_time = g_get_monotonic_time();
+                }
+            }
+            else if (n == 0)
+            {
+                close(pipefd[0]);
+                pipefd[0] = -1;
+                break;
+            }
+        }
+
         done = waitpid(pid, &status, WNOHANG);
         if (done == pid)
-            break;
-
-        if (stop)
         {
-            kill(pid, SIGTERM);
-            waitpid(pid, &status, 0);
+            while ((ready = (int)read(pipefd[0], buffer, sizeof(buffer))) > 0)
+            {
+                if (!write_full(out_fd, buffer, (gsize)ready))
+                    break;
+                total += (guint64)ready;
+            }
+
+            close(pipefd[0]);
+            pipefd[0] = -1;
             break;
         }
     }
 
-    if (*canceled)
+    if (pipefd[0] >= 0)
+        close(pipefd[0]);
+
+    close(out_fd);
+
+    if (stop)
+    {
+        kill(pid, SIGTERM);
+        waitpid(pid, &status, 0);
         return g_strdup("zfs send 已取消");
+    }
+
+    waitpid(pid, &status, 0);
 
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         return g_strdup_printf("zfs send 失败（exit=%d）",
                                WIFEXITED(status) ? WEXITSTATUS(status) : -1);
 
-    return NULL;
+    return g_strdup_printf("已发送 %" G_GUINT64_FORMAT " 字节", total);
 }
 
 static gchar *
@@ -484,9 +570,11 @@ handle_client(int fd)
 
             {
                 gboolean canceled = FALSE;
+                gint64 req_id = zg_json_object_get_int(root, "req_id", 0);
 
-                message = run_send_stream(fd, snapshot, out_fd, &canceled);
-                send_response(fd, message == NULL, message);
+                message = run_send_stream(fd, snapshot, out_fd, (guint32)req_id,
+                                          &canceled);
+                send_response(fd, message != NULL && !canceled, message);
                 if (canceled)
                     break;
             }
