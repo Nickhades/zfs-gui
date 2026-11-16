@@ -457,8 +457,6 @@ populate_snapshots_local(SendRecvPage *page)
     gtk_drop_down_set_selected(GTK_DROP_DOWN(page->send_snapshot),
                                found ? target : 0);
 
-    for (i = 0; i < snapshots->len; i++)
-        zg_model_snapshot_free(g_ptr_array_index(snapshots, i));
     g_ptr_array_free(snapshots, TRUE);
     g_free(keep);
     return TRUE;
