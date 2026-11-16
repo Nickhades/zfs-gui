@@ -20,6 +20,7 @@ void zg_helper_pool_close(void);
 
 /* 子进程选择自己独占的预连接槽位 */
 void zg_helper_set_slot(gint slot);
+int zg_helper_slot_fd(void);
 ZgOpOutcome *zg_helper_call(const ZgOpDef *op,
                             const ZgOpRequest *request);
 

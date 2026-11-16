@@ -21,6 +21,8 @@
 #include "zg-auth.h"
 #include "zg-exec.h"
 #include "zg-helper.h"
+#include "zg-task.h"
+#include "zg-progress.h"
 #include "zg-json.h"
 #include "zg-libzfs-exec.h"
 #include "zg-log.h"
@@ -504,6 +506,10 @@ capsicum_send_stream(const ZgOpRequest *request)
         outcome->data_json = g_strdup("");
         return outcome;
     }
+
+    if (zg_progress_fd() >= 0 && zg_helper_slot_fd() >= 0)
+        return zg_task_send_stream(zg_progress_fd(), zg_helper_slot_fd(),
+                                   snapshot, request->io_fd, (guint32)getpid());
 
     return zg_helper_send_stream(snapshot, request->io_fd);
 }
