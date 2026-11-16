@@ -13,6 +13,7 @@
 
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/capsicum.h>
 #include <libzfs.h>
 #include <string.h>
 #include <unistd.h>
@@ -40,6 +41,8 @@ typedef struct
     int (*snapshot)(libzfs_handle_t *, const char *, boolean_t, nvlist_t *);
     int (*rollback)(zfs_handle_t *, zfs_handle_t *, boolean_t);
     int (*clone)(zfs_handle_t *, const char *, nvlist_t *);
+    libzfs_handle_t *(*init_fd)(int);
+    int (*zpool_iter)(libzfs_handle_t *, zpool_iter_f, void *);
     int (*send)(zfs_handle_t *, const char *, const char *, sendflags_t *, int,
                 snapfilter_cb_t *, void *, nvlist_t **);
     int (*receive)(libzfs_handle_t *, const char *, nvlist_t *, recvflags_t *, int,
@@ -77,6 +80,7 @@ typedef struct
 static LzExec lz;
 static LzNv nv;
 static libzfs_handle_t *lz_handle;
+static int injected_fd = -1;
 static gboolean lz_loaded;
 static gboolean lz_ok;
 static gboolean nv_loaded;
@@ -155,13 +159,31 @@ lz_load(void)
     LZ_SYM(pool_trim, "zpool_trim");
     LZ_SYM(vdev_online, "zpool_vdev_online");
     LZ_SYM(vdev_offline, "zpool_vdev_offline");
+
+    *(void **)(&lz.init_fd) = dlsym(lz.dl, "libzfs_init_fd");
+    LZ_SYM(zpool_iter, "zpool_iter");
     LZ_SYM(pool_create, "zpool_create");
     LZ_SYM(pool_add, "zpool_add");
     LZ_SYM(vdev_remove, "zpool_vdev_remove");
 
 #undef LZ_SYM
 
-    lz_handle = lz.init();
+    if (injected_fd >= 0)
+    {
+        if (lz.init_fd == NULL)
+        {
+            zg_log_warning("libzfs: 缺少 libzfs_init_fd，无法进入能力模式");
+            dlclose(lz.dl);
+            memset(&lz, 0, sizeof(lz));
+            return FALSE;
+        }
+
+        lz_handle = lz.init_fd(injected_fd);
+    }
+    else
+    {
+        lz_handle = lz.init();
+    }
     if (lz_handle == NULL)
     {
         zg_log_warning("libzfs: 初始化失败（/dev/zfs 不可用？）");
@@ -1739,6 +1761,89 @@ try_pool_remove(const ZgOpRequest *request,
     return TRUE;
 }
 
+static int
+capsicum_warmup_cb(zpool_handle_t *zh,
+                   void *data)
+{
+    (void)data;
+    lz.pool_close(zh);
+    return 1;
+}
+
+gboolean
+zg_libzfs_exec_capsicum_prepare(void)
+{
+    cap_rights_t rights;
+    int fd;
+
+    if (injected_fd >= 0)
+        return TRUE;
+
+    fd = open("/dev/zfs", O_RDWR | O_EXCL | O_CLOEXEC);
+    if (fd < 0)
+    {
+        zg_log_warning("capsicum: 打开 /dev/zfs 失败：%s", g_strerror(errno));
+        return FALSE;
+    }
+
+    cap_rights_init(&rights, CAP_IOCTL, CAP_FSTAT, CAP_EVENT);
+    if (cap_rights_limit(fd, &rights) != 0)
+    {
+        zg_log_warning("capsicum: cap_rights_limit 失败：%s", g_strerror(errno));
+        close(fd);
+        return FALSE;
+    }
+
+    injected_fd = fd;
+
+    if (!lz_load())
+    {
+        close(fd);
+        injected_fd = -1;
+        return FALSE;
+    }
+
+    /* 预热 ioctl：libzfs_core 会读取 vfs.zfs.version.ioctl（sysctl） */
+    if (lz.zpool_iter(lz_handle, capsicum_warmup_cb, NULL) < 0)
+    {
+        zg_log_warning("capsicum: libzfs 预热失败");
+        return FALSE;
+    }
+
+    zg_log_info("capsicum: libzfs fd 注入完成，/dev/zfs fd=%d", fd);
+    return TRUE;
+}
+
+gboolean
+zg_libzfs_exec_capsicum_supports(const gchar *op_id)
+{
+    static const gchar *const allowed[] = {
+            "zfs.create",
+            "zfs.destroy",
+            "zfs.rename",
+            "zfs.set",
+            "zfs.snapshot",
+            "zfs.rollback",
+            "zfs.clone",
+            "zpool.destroy",
+            "zpool.export",
+            "zpool.scrub",
+            "zpool.trim",
+            "zpool.online",
+            "zpool.offline",
+            "zpool.remove",
+    };
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS(allowed); i++)
+    {
+        if (g_strcmp0(op_id, allowed[i]) == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 gboolean
 zg_libzfs_exec_try(const ZgOpDef *op,
                    const ZgOpRequest *request,
@@ -1803,6 +1908,19 @@ zg_libzfs_exec_try(const ZgOpDef *op,
 }
 
 #else /* !HAVE_LIBZFS */
+
+gboolean
+zg_libzfs_exec_capsicum_prepare(void)
+{
+    return FALSE;
+}
+
+gboolean
+zg_libzfs_exec_capsicum_supports(const gchar *op_id)
+{
+    (void)op_id;
+    return FALSE;
+}
 
 gboolean
 zg_libzfs_exec_try(const ZgOpDef *op,

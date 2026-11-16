@@ -20,4 +20,11 @@ gboolean zg_libzfs_exec_try(const ZgOpDef *op,
                             const ZgOpRequest *request,
                             ZgOpOutcome **outcome);
 
+/* 能力模式准备：打开并限制 /dev/zfs、注入 libzfs、预热 ioctl。
+ * 必须在 cap_enter() 之前调用；成功后子进程可继承已初始化的 handle。 */
+gboolean zg_libzfs_exec_capsicum_prepare(void);
+
+/* 能力模式下允许的操作（不需要额外文件/设备路径访问） */
+gboolean zg_libzfs_exec_capsicum_supports(const gchar *op_id);
+
 G_END_DECLS

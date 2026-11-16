@@ -622,3 +622,4 @@ notice, license text and disclaimer. See [LICENSE](LICENSE) and
 - [Capsicum feasibility and the bectl exception](docs/CAPSICUM.md)
 - [libzfs fd injection patch](docs/LIBZFS-FD-INJECTION.md)
 - [Read-only separation progress](docs/READ-ONLY-SEPARATION.md)
+- [Privileged helper architecture](docs/HELPER.md)

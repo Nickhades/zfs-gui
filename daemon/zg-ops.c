@@ -20,6 +20,7 @@
 
 #include "zg-auth.h"
 #include "zg-exec.h"
+#include "zg-helper.h"
 #include "zg-json.h"
 #include "zg-libzfs-exec.h"
 #include "zg-log.h"
@@ -467,6 +468,20 @@ zg_op_execute(const ZgOpDef *op,
         outcome = system_info(policy);
     else if (g_strcmp0(op->id, "system.arcstats") == 0)
         outcome = system_arcstats();
+    else if (zg_policy_capsicum_mode(policy) && zg_helper_supports(op->id))
+    {
+        outcome = zg_helper_call(op, request);
+    }
+    else if (zg_policy_capsicum_mode(policy) &&
+             !zg_libzfs_exec_capsicum_supports(op->id))
+    {
+        outcome = outcome_new();
+        set_failure(outcome, 1,
+                    "Capsicum 模式：该操作需要文件/设备路径访问，已拒绝");
+        outcome->stdout_text = g_strdup("");
+        outcome->stderr_text = g_strdup("");
+        outcome->data_json = g_strdup("");
+    }
     else
     {
         if (!zg_libzfs_exec_try(op, request, &outcome))

@@ -29,6 +29,8 @@
 #include "zg-exec.h"
 #include "zg-io.h"
 #include "zg-json.h"
+#include "zg-helper.h"
+#include "zg-libzfs-exec.h"
 #include "zg-log.h"
 #include "zg-opdef.h"
 #include "zg-ops.h"
@@ -58,6 +60,9 @@ audit_sanitize(const gchar *text)
 
 static int zg_signal_pipe[2] = {-1, -1};
 static volatile sig_atomic_t zg_terminate_requested = 0;
+
+static gint helper_slot_pids[ZG_HELPER_POOL_SIZE];
+static gint pending_helper_slot = -1;
 
 /* ------------------------------------------------------------------------- */
 /* 信号处理                                                                   */
@@ -119,6 +124,19 @@ reap_children(guint *active_children)
 
         if (*active_children > 0)
             (*active_children)--;
+
+        {
+            guint i;
+
+            for (i = 0; i < ZG_HELPER_POOL_SIZE; i++)
+            {
+                if (helper_slot_pids[i] == pid)
+                {
+                    helper_slot_pids[i] = -1;
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -492,6 +510,13 @@ int zg_server_run(const ZgPolicy *policy)
     guint active_children = 0;
     gint exit_status = 0;
 
+    {
+        guint i;
+
+        for (i = 0; i < ZG_HELPER_POOL_SIZE; i++)
+            helper_slot_pids[i] = -1;
+    }
+
     if (!install_signal_handlers())
     {
         zg_log_error("安装信号处理器失败：%s", g_strerror(errno));
@@ -504,6 +529,56 @@ int zg_server_run(const ZgPolicy *policy)
         return -1;
 
     limit_rights(server_fd, TRUE, "listen");
+
+    if (zg_policy_capsicum_mode(policy))
+    {
+        if (!zg_policy_strict_mode(policy))
+        {
+            zg_log_error("capsicum_mode 需要同时启用 strict_mode");
+            close(server_fd);
+            unlink(zg_policy_socket_path(policy));
+            return -1;
+        }
+
+        if (!zg_policy_precompute_identities((ZgPolicy *)policy))
+        {
+            zg_log_error("capsicum: 预解析允许用户/组失败");
+            close(server_fd);
+            unlink(zg_policy_socket_path(policy));
+            return -1;
+        }
+
+        {
+            GError *helper_error = NULL;
+
+            if (zg_helper_pool_open(ZG_HELPER_POOL_SIZE, &helper_error))
+                zg_log_info("capsicum: 已预连接 %u 个 Helper 通道",
+                            ZG_HELPER_POOL_SIZE);
+            else
+                zg_log_warning("capsicum: Helper 预连接失败：%s",
+                               helper_error != NULL ? helper_error->message : "未知错误");
+
+            g_clear_error(&helper_error);
+        }
+
+        if (!zg_libzfs_exec_capsicum_prepare())
+        {
+            zg_log_error("capsicum 准备失败（libzfs fd 注入不可用）");
+            close(server_fd);
+            unlink(zg_policy_socket_path(policy));
+            return -1;
+        }
+
+        if (cap_enter() != 0)
+        {
+            zg_log_error("cap_enter 失败：%s", g_strerror(errno));
+            close(server_fd);
+            unlink(zg_policy_socket_path(policy));
+            return -1;
+        }
+
+        zg_log_info("已进入 Capsicum 能力模式");
+    }
 
     zg_log_info("守护进程已启动，监听 %s（用户 %s / 组 %s）",
                 zg_policy_socket_path(policy),
@@ -604,6 +679,20 @@ int zg_server_run(const ZgPolicy *policy)
                 continue;
             }
 
+            pending_helper_slot = -1;
+            {
+                guint i;
+
+                for (i = 0; i < ZG_HELPER_POOL_SIZE; i++)
+                {
+                    if (helper_slot_pids[i] < 0)
+                    {
+                        pending_helper_slot = (gint)i;
+                        break;
+                    }
+                }
+            }
+
             pid = fork();
 
             if (pid < 0)
@@ -626,6 +715,7 @@ int zg_server_run(const ZgPolicy *policy)
                 signal(SIGCHLD, SIG_DFL);
                 signal(SIGPIPE, SIG_IGN);
 
+                zg_helper_set_slot(pending_helper_slot);
                 limit_rights(client_fd, FALSE, "connection");
                 handle_client(client_fd, policy, uid);
 
@@ -635,6 +725,9 @@ int zg_server_run(const ZgPolicy *policy)
 
             close(client_fd);
             active_children++;
+
+            if (pending_helper_slot >= 0)
+                helper_slot_pids[pending_helper_slot] = pid;
         }
     }
 
