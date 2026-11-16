@@ -328,6 +328,20 @@ execute_stream(SendRecvPage *page,
 #define SEND_NO_SNAPSHOT "（暂无快照）"
 
 static void
+clear_focusability(GtkWidget *widget)
+{
+    GtkWidget *child = gtk_widget_get_first_child(widget);
+
+    gtk_widget_set_focusable(widget, FALSE);
+
+    while (child != NULL)
+    {
+        clear_focusability(child);
+        child = gtk_widget_get_next_sibling(child);
+    }
+}
+
+static void
 on_snapshot_changed(GObject *object,
                     GParamSpec *pspec,
                     gpointer user_data)
@@ -742,7 +756,7 @@ build_send_group(SendRecvPage *page)
     page->send_snapshot = gtk_drop_down_new(G_LIST_MODEL(page->snapshots), NULL);
     gtk_drop_down_set_enable_search(GTK_DROP_DOWN(page->send_snapshot), TRUE);
     gtk_widget_set_hexpand(page->send_snapshot, TRUE);
-    gtk_widget_set_focusable(page->send_snapshot, FALSE);
+    clear_focusability(page->send_snapshot);
     {
         GtkWidget *snapshot_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         GtkWidget *refresh = gtk_button_new_from_icon_name("zg-refresh-symbolic");
@@ -774,7 +788,7 @@ build_send_group(SendRecvPage *page)
     }
 
     page->send_mode = gtk_drop_down_new_from_strings(modes);
-    gtk_widget_set_focusable(page->send_mode, FALSE);
+    clear_focusability(page->send_mode);
     zg_dialogs_add_field(grid, &row, "模式", page->send_mode, NULL);
 
     page->send_base = gtk_entry_new();
