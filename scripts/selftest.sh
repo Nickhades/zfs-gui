@@ -101,6 +101,11 @@ if [ -x "$ROOT/$BUILD/scm_rights_test" ]; then
   "$ROOT/$BUILD/scm_rights_test" >/dev/null || STATUS=1
 fi
 
+if [ -x "$ROOT/$BUILD/kqueue_frame_test" ]; then
+  echo "[selftest] kqueue 帧解析测试..."
+  "$ROOT/$BUILD/kqueue_frame_test" >/dev/null || STATUS=1
+fi
+
 if [ "$WITH_GUI" -eq 1 ]; then
   if [ -z "${DISPLAY:-}" ]; then
     echo "[selftest] 未设置 DISPLAY，跳过界面启动测试"
