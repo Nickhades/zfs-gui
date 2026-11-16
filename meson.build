@@ -150,7 +150,7 @@ executable('zfs-guid',
   ),
   dependencies: [zgcommon_dep, pam_dep, libzfs_dep],
   link_with: zg_task_lib,
-  c_args: use_libzfs ? ['-DHAVE_LIBZFS', '-Wno-gnu-include-next', '-Wno-variadic-macros'] : [],
+  c_args: (use_libzfs ? ['-DHAVE_LIBZFS', '-Wno-gnu-include-next', '-Wno-variadic-macros'] : []) + ['-Wno-overlength-strings'],
   install: true,
   install_dir: get_option('sbindir'),
 )
@@ -188,7 +188,7 @@ if gtk_dep.found()
         source_dir: 'data/icons',
         c_name: 'zg_icons'),
     dependencies: [zgcommon_dep, gtk_dep, gio_dep, libzfs_dep],
-    c_args: use_libzfs ? ['-DHAVE_LIBZFS', '-Wno-gnu-include-next', '-Wno-variadic-macros'] : [],
+    c_args: (use_libzfs ? ['-DHAVE_LIBZFS', '-Wno-gnu-include-next', '-Wno-variadic-macros'] : []) + ['-Wno-overlength-strings'],
     install: true,
   )
 
