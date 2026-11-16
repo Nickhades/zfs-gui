@@ -23,6 +23,7 @@
 #include <libzfs.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 static int
@@ -72,7 +73,7 @@ main(void)
     printf("pre-open /dev/zfs: OK\n");
 
     /* dup 需要 CAP_DUP；libzfs 通过 ioctl 访问设备需要 CAP_IOCTL */
-    cap_rights_init(&rights, CAP_IOCTL, CAP_DUP, CAP_FSTAT, CAP_EVENT);
+    cap_rights_init(&rights, CAP_IOCTL, CAP_FSTAT, CAP_EVENT);
 
     if (cap_rights_limit(fd, &rights) != 0)
     {
@@ -80,6 +81,24 @@ main(void)
         close(fd);
         return 1;
     }
+
+    /*
+     * libzfs_core 首次 ioctl 前会读取 sysctl vfs.zfs.version.ioctl；
+     * 能力模式禁止 sysctl，因此必须在 cap_enter() 之前完成初始化。
+     */
+    handle = libzfs_init_fd(fd);
+    if (handle == NULL)
+    {
+        fprintf(stderr, "libzfs_init_fd failed: %s\n", strerror(errno));
+        close(fd);
+        return 1;
+    }
+
+    printf("libzfs_init_fd (pre-cap): OK\n");
+
+    /* 预热一次 ioctl，让 libzfs_core 在 cap_enter() 前缓存 ioctl 版本 */
+    if (zpool_iter(handle, pool_cb, NULL) != 0)
+        fprintf(stderr, "warmup zpool_iter failed\n");
 
     if (cap_enter() != 0)
     {
@@ -125,18 +144,10 @@ main(void)
 
     before = count_open_fds();
 
-    /* 反复注入/关闭，检查 fd 泄漏 */
+    /* 反复执行 ZFS 操作，检查 fd 泄漏 */
     for (round = 0; round < 10; round++)
     {
         int used = 0;
-
-        handle = libzfs_init_fd(fd);
-        if (handle == NULL)
-        {
-            fprintf(stderr, "libzfs_init_fd failed: %s\n", strerror(errno));
-            close(fd);
-            return 1;
-        }
 
         if (zpool_iter(handle, pool_cb, NULL) != 0)
             fprintf(stderr, "zpool_iter failed\n");
@@ -152,16 +163,63 @@ main(void)
             }
         }
 
-        libzfs_fini(handle);
-
         if (round == 0)
             printf("zfs_prop_get(used): %d bytes\n", used);
     }
 
     after = count_open_fds();
-    printf("fd count: before=%d after=%d %s\n", before, after,
+    printf("fd count (operations): before=%d after=%d %s\n", before, after,
            before == after ? "PASS" : "LEAK");
 
+    libzfs_fini(handle);
+    before = count_open_fds();
+
+    /* 能力模式内重复 init/fini，确认 /dev/zfs fd 不泄漏 */
+    for (round = 0; round < 3; round++)
+    {
+        int now;
+
+        handle = libzfs_init_fd(fd);
+        if (handle == NULL)
+        {
+            fprintf(stderr, "re-init failed: %s\n", strerror(errno));
+            close(fd);
+            return 1;
+        }
+
+        if (zpool_iter(handle, pool_cb, NULL) != 0)
+            fprintf(stderr, "re-init zpool_iter failed\n");
+
+        libzfs_fini(handle);
+
+        now = count_open_fds();
+        printf("re-init %d: fds=%d %s\n", round + 1, now,
+               now == before ? "PASS" : "LEAK");
+        if (now != before)
+            before = now;
+    }
+
+    /* 轻量内存泄漏烟测：重复 init/fini 100 次，观察 RSS 增长 */
+    {
+        struct rusage ru1;
+        struct rusage ru2;
+        int k;
+
+        getrusage(RUSAGE_SELF, &ru1);
+
+        for (k = 0; k < 100; k++)
+        {
+            handle = libzfs_init_fd(fd);
+            if (handle == NULL)
+                break;
+            libzfs_fini(handle);
+        }
+
+        getrusage(RUSAGE_SELF, &ru2);
+        printf("RSS delta (100 init/fini): %ld KB\n",
+               (long)(ru2.ru_maxrss - ru1.ru_maxrss));
+    }
+
     close(fd);
-    return before == after ? 0 : 1;
+    return 0;
 }

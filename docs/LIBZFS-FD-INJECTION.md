@@ -47,13 +47,13 @@ int libzfs_core_init_fd(int fd);
 ## 3. 所需 fd 权利
 
 ```c
-cap_rights_init(&rights, CAP_IOCTL, CAP_DUP, CAP_FSTAT, CAP_EVENT);
+cap_rights_init(&rights, CAP_IOCTL, CAP_FSTAT, CAP_EVENT);
 cap_rights_limit(fd, &rights);
 ```
 
 - `CAP_IOCTL`：所有 ZFS ioctl
-- `CAP_DUP`：libzfs 内部复制 fd
 - `CAP_FSTAT` / `CAP_EVENT`：部分代码路径会用到
+- FreeBSD 上 `dup(2)`/`fcntl(F_DUPFD)` 不需要额外权利，因此没有 `CAP_DUP`
 
 ## 4. 构建与测试
 
@@ -88,8 +88,32 @@ pool zroot
 ...
 ```
 
-当前构建机缺少 `libtool`，未在本机完成编译验证；补丁本身已通过
-`patch -p1 --dry-run` 应用验证。
+### 已完成的编译与沙箱验证（FreeBSD 15.1）
+
+- 安装 `libtool` 后，对补丁后的 OpenZFS 2.4.2 执行
+  `./autogen.sh && ./configure --with-config=user && gmake -j4` 成功
+- 构建出的 `libzfs.so.7` 导出 `libzfs_init_fd`，`libzfs_core.so.3` 导出
+  `libzfs_core_init_fd`
+- `tools/libzfs_fd_test.c` 链接构建产物后运行通过：
+
+```
+libzfs_init_fd (pre-cap): OK
+cap_enter: OK
+sandbox open(/etc/passwd): denied (errno=94)
+sandbox execv: denied (errno=94)
+zfs_prop_get(used): ... bytes
+fd count (operations): PASS
+re-init 1/2/3: PASS
+RSS delta (100 init/fini): 0 KB
+```
+
+重要限制：`libzfs_core` 第一次 ioctl 前会 `sysctl("vfs.zfs.version.ioctl")`，
+能力模式禁止 sysctl。因此在 `cap_enter()` 前必须初始化 libzfs 并执行一次
+预热 ioctl（测试程序已这样做）；否则会报
+`unrecognized zfs ioctl version 0`。
+
+Valgrind 3.27 在本机 FreeBSD 15.1 上启动即 SIGILL，无法用于泄漏检测；
+改用 fd 计数 + RSS 烟测（结果见上）。
 
 ## 5. 与守护进程集成（后续）
 
