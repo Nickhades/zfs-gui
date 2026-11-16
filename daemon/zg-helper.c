@@ -167,6 +167,101 @@ write_full(int fd,
 }
 
 ZgOpOutcome *
+zg_helper_receive_stream(const gchar *target,
+                         gint file_fd,
+                         gboolean force)
+{
+    ZgJsonWriter *writer;
+    struct msghdr msg;
+    struct iovec iov;
+    char cbuf[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg;
+    char byte = 'R';
+    gchar *text;
+    guint32 length;
+
+    if (target == NULL || file_fd < 0 || helper_count == 0 ||
+        helper_slot < 0 || (guint)helper_slot >= helper_count)
+        return helper_outcome(FALSE, "Capsicum 模式：zfs.receive 缺少 GUI 传入的 fd");
+
+    writer = zg_json_writer_new();
+    zg_json_writer_begin_object(writer, NULL);
+    zg_json_writer_set_int(writer, "v", 1);
+    zg_json_writer_set_string(writer, "op", "receive_stream");
+    zg_json_writer_set_string(writer, "target", target);
+    zg_json_writer_set_bool(writer, "force", force);
+    zg_json_writer_end_object(writer);
+    text = zg_json_writer_to_string(writer, NULL);
+
+    length = g_htonl((guint32)strlen(text));
+    if (!write_full(helper_fds[helper_slot], &length, sizeof(length)) ||
+        !write_full(helper_fds[helper_slot], text, strlen(text)))
+    {
+        g_free(text);
+        return helper_outcome(FALSE, "向 Helper 发送 receive_stream 请求失败");
+    }
+
+    memset(&msg, 0, sizeof(msg));
+    memset(cbuf, 0, sizeof(cbuf));
+    iov.iov_base = &byte;
+    iov.iov_len = 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cbuf;
+    msg.msg_controllen = sizeof(cbuf);
+    cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(cmsg), &file_fd, sizeof(file_fd));
+
+    if (sendmsg(helper_fds[helper_slot], &msg, MSG_NOSIGNAL) != 1)
+    {
+        g_free(text);
+        return helper_outcome(FALSE, "向 Helper 传递备份文件 fd 失败");
+    }
+
+    g_free(text);
+
+    if (!read_full(helper_fds[helper_slot], &length, sizeof(length)))
+        return helper_outcome(FALSE, "读取 Helper receive_stream 应答失败");
+
+    length = g_ntohl(length);
+    if (length == 0 || length > 64 * 1024)
+        return helper_outcome(FALSE, "Helper receive_stream 应答非法");
+
+    {
+        gchar *response = g_malloc0((gsize)length + 1);
+        GError *error = NULL;
+        ZgJson *root;
+        ZgOpOutcome *outcome;
+
+        if (!read_full(helper_fds[helper_slot], response, length))
+        {
+            g_free(response);
+            return helper_outcome(FALSE, "读取 Helper receive_stream 应答体失败");
+        }
+
+        root = zg_json_parse(response, -1, &error);
+        g_free(response);
+
+        if (root == NULL)
+        {
+            outcome = helper_outcome(FALSE,
+                                     error != NULL ? error->message : "Helper 应答解析失败");
+            g_clear_error(&error);
+            return outcome;
+        }
+
+        outcome = helper_outcome(
+                zg_json_object_get_bool(root, "ok", FALSE),
+                zg_json_object_get_string(root, "message"));
+        zg_json_free(root);
+        return outcome;
+    }
+}
+
+ZgOpOutcome *
 zg_helper_send_stream(const gchar *snapshot,
                       gint file_fd)
 {
