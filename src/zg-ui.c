@@ -10,26 +10,24 @@
 #include "zg-model.h"
 
 static const gchar zg_css[] =
-        "@define-color zg_bg #f4f6f3;"
-        "\n"
-        "* { font-weight: 700; }"
+        "@define-color zg_bg @theme_bg_color;"
         "\n"
 
-        "@define-color zg_surface #ffffff;"
+        "@define-color zg_surface @theme_base_color;"
         "\n"
-        "@define-color zg_surface_alt #edf1ec;"
+        "@define-color zg_surface_alt @theme_bg_color;"
         "\n"
-        "@define-color zg_border rgba(24, 40, 30, 0.12);"
+        "@define-color zg_border @borders;"
         "\n"
-        "@define-color zg_text #1c2a21;"
+        "@define-color zg_text @theme_fg_color;"
         "\n"
-        "@define-color zg_text_dim #5f7064;"
+        "@define-color zg_text_dim alpha(@theme_fg_color, 0.66);"
         "\n"
-        "@define-color zg_accent #3fb883;"
+        "@define-color zg_accent @theme_selected_bg_color;"
         "\n"
-        "@define-color zg_accent_hover #34a572;"
+        "@define-color zg_accent_hover @theme_selected_bg_color;"
         "\n"
-        "@define-color zg_accent_soft #d9f2e6;"
+        "@define-color zg_accent_soft alpha(@theme_selected_bg_color, 0.16);"
         "\n"
         "@define-color zg_danger #d9534f;"
         "\n"
@@ -37,7 +35,7 @@ static const gchar zg_css[] =
         "\n"
         ""
         "\n"
-        "window { background-color: @zg_bg; color: @zg_text; font-family: \"Noto Sans CJK SC\", \"Source Han Sans SC\", \"Noto Sans\", sans-serif; font-weight: 700; }"
+        "window { background-color: @zg_bg; color: @zg_text; }"
         "\n"
         "headerbar { background-color: @zg_surface; color: @zg_text; border-bottom: 1px solid @zg_border; min-height: 46px; }"
         "\n"
@@ -124,23 +122,23 @@ static const gchar zg_css[] =
 
 static const gchar zg_css_tail[] =
 
-        "@define-color zg_bg #f4f6f3;"
+        "@define-color zg_bg @theme_bg_color;"
         "\n"
-        "@define-color zg_surface #ffffff;"
+        "@define-color zg_surface @theme_base_color;"
         "\n"
-        "@define-color zg_surface_alt #edf1ec;"
+        "@define-color zg_surface_alt @theme_bg_color;"
         "\n"
-        "@define-color zg_border rgba(24, 40, 30, 0.12);"
+        "@define-color zg_border @borders;"
         "\n"
-        "@define-color zg_text #1c2a21;"
+        "@define-color zg_text @theme_fg_color;"
         "\n"
-        "@define-color zg_text_dim #5f7064;"
+        "@define-color zg_text_dim alpha(@theme_fg_color, 0.66);"
         "\n"
-        "@define-color zg_accent #3fb883;"
+        "@define-color zg_accent @theme_selected_bg_color;"
         "\n"
-        "@define-color zg_accent_hover #34a572;"
+        "@define-color zg_accent_hover @theme_selected_bg_color;"
         "\n"
-        "@define-color zg_accent_soft #d9f2e6;"
+        "@define-color zg_accent_soft alpha(@theme_selected_bg_color, 0.16);"
         "\n"
         "@define-color zg_danger #d9534f;"
         "\n"
@@ -272,23 +270,23 @@ static const gchar zg_css_tail[] =
 
 /* 第三段：命令中心列表的选中样式（避免与主题蓝色选中冲突） */
 static const gchar zg_css_extra[] =
-        "@define-color zg_bg #f4f6f3;"
+        "@define-color zg_bg @theme_bg_color;"
         "\n"
-        "@define-color zg_surface #ffffff;"
+        "@define-color zg_surface @theme_base_color;"
         "\n"
-        "@define-color zg_surface_alt #edf1ec;"
+        "@define-color zg_surface_alt @theme_bg_color;"
         "\n"
-        "@define-color zg_border rgba(24, 40, 30, 0.12);"
+        "@define-color zg_border @borders;"
         "\n"
-        "@define-color zg_text #1c2a21;"
+        "@define-color zg_text @theme_fg_color;"
         "\n"
-        "@define-color zg_text_dim #5f7064;"
+        "@define-color zg_text_dim alpha(@theme_fg_color, 0.66);"
         "\n"
-        "@define-color zg_accent #3fb883;"
+        "@define-color zg_accent @theme_selected_bg_color;"
         "\n"
-        "@define-color zg_accent_hover #34a572;"
+        "@define-color zg_accent_hover @theme_selected_bg_color;"
         "\n"
-        "@define-color zg_accent_soft #d9f2e6;"
+        "@define-color zg_accent_soft alpha(@theme_selected_bg_color, 0.16);"
         "\n"
         "@define-color zg_danger #d9534f;"
         "\n"
@@ -322,25 +320,6 @@ static const gchar *const zg_state_classes[] = {
         "zg-state-offline",
         "zg-state-unknown",
 };
-
-/* 固定浅色主题：绿色强调色 + 白色卡片 */
-static void
-apply_desktop_theme(void)
-{
-    GtkSettings *settings = gtk_settings_get_default();
-
-    if (settings == NULL)
-        return;
-
-    /* 允许用户用 GTK_THEME 覆盖；否则固定浅色主题，保证配色一致 */
-    if (g_getenv("GTK_THEME") != NULL)
-        return;
-
-    g_object_set(settings,
-                 "gtk-theme-name", "Adwaita",
-                 "gtk-application-prefer-dark-theme", FALSE,
-                 NULL);
-}
 
 void zg_ui_init(void)
 {
