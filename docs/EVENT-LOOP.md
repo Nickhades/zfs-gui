@@ -264,3 +264,23 @@ PASS: zfs send gone
 ```
 
 `pgrep -f "zfs send ..."` 断言通过。
+
+## 15. receive_stream 复用同一 task
+
+`zg_task_receive_stream()` 与 send 共用同一个 kqueue 事件循环，只改请求帧：
+
+```json
+{"op":"receive_stream","target":"pool/recv","force":false,"req_id":N}
+```
+
+随后仍是两段式：SCM_RIGHTS 只读 fd 单独发送。
+
+实测 8MB 流恢复到 `zgtest/recv@s1`：
+
+```
+{"ok": true, "code": 0, "message": ""}
+zfs list -t snapshot: zgtest/recv@s1
+```
+
+当前 receive 尚未做 PROGRESS（Helper 侧未加代理计数），只上报最终状态；
+后续可在 Helper 读流循环里累加字节并复用 progress 帧。
