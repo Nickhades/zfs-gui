@@ -23,4 +23,8 @@ void zg_helper_set_slot(gint slot);
 ZgOpOutcome *zg_helper_call(const ZgOpDef *op,
                             const ZgOpRequest *request);
 
+/* 通过 SCM_RIGHTS 把已打开的文件 fd 交给 Helper 执行 zfs send */
+ZgOpOutcome *zg_helper_send_stream(const gchar *snapshot,
+                                   gint file_fd);
+
 G_END_DECLS

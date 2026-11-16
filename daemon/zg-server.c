@@ -285,6 +285,41 @@ send_response(int fd,
     g_free(payload);
 }
 
+static int
+recv_ancillary_fd(int sock)
+{
+    struct msghdr msg;
+    struct iovec iov;
+    char cbuf[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg;
+    char byte = 0;
+    int received = -1;
+
+    memset(&msg, 0, sizeof(msg));
+    memset(cbuf, 0, sizeof(cbuf));
+    iov.iov_base = &byte;
+    iov.iov_len = 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cbuf;
+    msg.msg_controllen = sizeof(cbuf);
+
+    if (recvmsg(sock, &msg, MSG_CMSG_CLOEXEC) != 1)
+        return -1;
+
+    if (msg.msg_flags & MSG_CTRUNC)
+        return -1;
+
+    cmsg = CMSG_FIRSTHDR(&msg);
+    if (cmsg == NULL || cmsg->cmsg_level != SOL_SOCKET ||
+        cmsg->cmsg_type != SCM_RIGHTS ||
+        cmsg->cmsg_len != CMSG_LEN(sizeof(int)))
+        return -1;
+
+    memcpy(&received, CMSG_DATA(cmsg), sizeof(received));
+    return received;
+}
+
 static void
 send_error(int fd,
            gint code,
@@ -377,6 +412,19 @@ handle_client(int fd,
     {
         send_error(fd, -1, error != NULL ? error->message : "参数解析失败");
         goto out;
+    }
+
+    if (zg_json_object_get_bool(root, "has_fd", FALSE))
+    {
+        gint io_fd = recv_ancillary_fd(fd);
+
+        if (io_fd < 0)
+        {
+            send_error(fd, -1, "请求声明了 has_fd，但未收到有效的文件描述符");
+            goto out;
+        }
+
+        request->io_fd = io_fd;
     }
 
     if (!zg_op_request_validate(op, request, &error))
@@ -487,6 +535,9 @@ handle_client(int fd,
                   outcome->message);
 
 out:
+    if (request != NULL && request->io_fd >= 0)
+        close(request->io_fd);
+
     zg_op_outcome_free(outcome);
     zg_op_request_free(request);
     zg_json_free(root);
