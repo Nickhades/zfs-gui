@@ -451,6 +451,40 @@ backup_unlink(const ZgOpRequest *request)
 }
 
 static ZgOpOutcome *
+capsicum_receive_stream(const ZgOpRequest *request)
+{
+    ZgOpOutcome *outcome;
+    const gchar *target = request->positional->len > 0
+                                  ? g_ptr_array_index(request->positional, 0)
+                                  : NULL;
+    gboolean force = FALSE;
+    guint i;
+
+    for (i = 0; i < request->flags->len; i++)
+    {
+        const gchar *flag = g_ptr_array_index(request->flags, i);
+
+        if (g_strcmp0(flag, "-F") == 0)
+            force = TRUE;
+        else
+            return NULL;
+    }
+
+    if (request->options->len > 0 || target == NULL || request->io_fd < 0)
+    {
+        outcome = outcome_new();
+        set_failure(outcome, 1,
+                    "Capsicum 模式：zfs.receive 需要 GUI 通过 SCM_RIGHTS 传入备份文件 fd");
+        outcome->stdout_text = g_strdup("");
+        outcome->stderr_text = g_strdup("");
+        outcome->data_json = g_strdup("");
+        return outcome;
+    }
+
+    return zg_helper_receive_stream(target, request->io_fd, force);
+}
+
+static ZgOpOutcome *
 capsicum_send_stream(const ZgOpRequest *request)
 {
     ZgOpOutcome *outcome;
@@ -492,6 +526,11 @@ zg_op_execute(const ZgOpDef *op,
         outcome = system_info(policy);
     else if (g_strcmp0(op->id, "system.arcstats") == 0)
         outcome = system_arcstats();
+    else if (zg_policy_capsicum_mode(policy) &&
+             g_strcmp0(op->id, "zfs.receive") == 0)
+    {
+        outcome = capsicum_receive_stream(request);
+    }
     else if (zg_policy_capsicum_mode(policy) &&
              g_strcmp0(op->id, "zfs.send") == 0)
     {

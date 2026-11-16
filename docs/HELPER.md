@@ -259,3 +259,38 @@ Helper 对对应长任务子进程发 SIGTERM。
 - JSON 控制通道仍同步等待最终结果；PROGRESS 未实现
 - 每次长流占用一个预连接 Helper 槽位（共 5 个）
 - CANCEL 目前依赖连接 EOF 或任意字节触发，没有 req_id 精确匹配
+
+## 13. receive_stream（已打通）
+
+Helper 新增 `receive_stream`，与 send 镜像：
+
+1. 客户端发送 JSON 帧：`{"op":"receive_stream","target":"pool/recv","force":false}`
+2. 随后发送 1 字节 + SCM_RIGHTS 只读文件 fd
+3. Helper fork `zfs receive [-F] target`，stdin 指向该 fd
+4. 同样 poll 控制 socket：客户端断开/CANCEL 时 SIGTERM 终止接收
+
+测试程序：`tests/receive_stream_chain.py`
+
+实测：
+
+```
+请求 receive_stream → zgtest/recv
+应答 {'ok': True, 'code': 0}
+zfs list -t snapshot: zgtest/recv@s1
+```
+
+### 踩坑：SIGCHLD 不能 SIG_IGN
+
+Helper 最初设置了 `signal(SIGCHLD, SIG_IGN)`，导致长任务子进程被自动回收，
+`waitpid()` 永远返回 ECHILD，转换后的接收/发送监控循环会一直 poll 不退出，
+客户端超时。
+
+修复：移除 `SIGCHLD=SIG_IGN`，在 accept 循环里用
+`waitpid(-1, NULL, WNOHANG)` 回收连接子进程；长任务监控里的
+`waitpid(pid, ...)` 才能正常返回。
+
+### 当前接收限制
+
+- 只支持 `-F`（force），未支持 `-d/-e/-u/-n/-o`
+- 不支持 origin/克隆来源参数
+- 无 PROGRESS 回报；长流仍同步占用一个 Helper 槽位

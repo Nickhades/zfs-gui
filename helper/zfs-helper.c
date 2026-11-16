@@ -299,6 +299,83 @@ run_send_stream(int control_fd,
     return NULL;
 }
 
+static gchar *
+run_receive_stream(int control_fd,
+                   const gchar *target,
+                   int in_fd,
+                   gboolean force,
+                   gboolean *canceled)
+{
+    pid_t pid;
+    int status = 0;
+    gboolean stop = FALSE;
+
+    *canceled = FALSE;
+
+    pid = fork();
+    if (pid < 0)
+        return g_strdup(g_strerror(errno));
+
+    if (pid == 0)
+    {
+        if (dup2(in_fd, STDIN_FILENO) < 0)
+            _exit(126);
+
+        close(in_fd);
+
+        if (force)
+            execl("/sbin/zfs", "zfs", "receive", "-F", target, (char *)NULL);
+        else
+            execl("/sbin/zfs", "zfs", "receive", target, (char *)NULL);
+
+        _exit(127);
+    }
+
+    close(in_fd);
+
+    while (!stop)
+    {
+        struct pollfd pfd;
+        int ready;
+        pid_t done;
+
+        pfd.fd = control_fd;
+        pfd.events = POLLIN | POLLHUP;
+        pfd.revents = 0;
+
+        ready = poll(&pfd, 1, 100);
+
+        if (ready > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR)))
+        {
+            char buffer[64];
+
+            (void)recv(control_fd, buffer, sizeof(buffer), MSG_DONTWAIT);
+            *canceled = TRUE;
+            stop = TRUE;
+        }
+
+        done = waitpid(pid, &status, WNOHANG);
+        if (done == pid)
+            break;
+
+        if (stop)
+        {
+            kill(pid, SIGTERM);
+            waitpid(pid, &status, 0);
+            break;
+        }
+    }
+
+    if (*canceled)
+        return g_strdup("zfs receive 已取消");
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return g_strdup_printf("zfs receive 失败（exit=%d）",
+                               WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+
+    return NULL;
+}
+
 static void
 handle_client(int fd)
 {
@@ -312,6 +389,7 @@ handle_client(int fd)
         const gchar *op;
         const gchar *dataset;
         const gchar *snapshot;
+        const gchar *target;
         const gchar *options = "";
         gboolean force;
         gchar *message;
@@ -341,12 +419,46 @@ handle_client(int fd)
         op = zg_json_object_get_string(root, "op");
         dataset = zg_json_object_get_string(root, "dataset");
         snapshot = zg_json_object_get_string(root, "snapshot");
+        target = zg_json_object_get_string(root, "target");
         options = zg_json_object_get_string(root, "options");
         force = zg_json_object_get_bool(root, "force", FALSE);
 
         if (op == NULL)
         {
             send_response(fd, FALSE, "请求参数非法");
+            zg_json_free(root);
+            continue;
+        }
+
+        if (g_strcmp0(op, "receive_stream") == 0)
+        {
+            int in_fd;
+
+            if (target == NULL || !zg_dataset_name_valid(target))
+            {
+                send_response(fd, FALSE, "目标数据集名非法");
+                zg_json_free(root);
+                continue;
+            }
+
+            in_fd = recv_stream_fd(fd);
+            if (in_fd < 0)
+            {
+                send_response(fd, FALSE, "未收到有效的流文件 fd");
+                zg_json_free(root);
+                continue;
+            }
+
+            {
+                gboolean canceled = FALSE;
+
+                message = run_receive_stream(fd, target, in_fd, force, &canceled);
+                send_response(fd, message == NULL, message);
+                if (canceled)
+                    break;
+            }
+
+            g_free(message);
             zg_json_free(root);
             continue;
         }
@@ -428,7 +540,6 @@ int main(int argc,
         socket_path = ZG_HELPER_SOCKET_DEFAULT;
 
     signal(SIGPIPE, SIG_IGN);
-    signal(SIGCHLD, SIG_IGN);
 
     listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listen_fd < 0)
@@ -469,6 +580,9 @@ int main(int argc,
             close(client_fd);
             continue;
         }
+
+        while (waitpid(-1, NULL, WNOHANG) > 0)
+            ;
 
         {
             pid_t pid = fork();

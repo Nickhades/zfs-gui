@@ -27,4 +27,9 @@ ZgOpOutcome *zg_helper_call(const ZgOpDef *op,
 ZgOpOutcome *zg_helper_send_stream(const gchar *snapshot,
                                    gint file_fd);
 
+/* 通过 SCM_RIGHTS 把已打开的备份文件 fd 交给 Helper 执行 zfs receive */
+ZgOpOutcome *zg_helper_receive_stream(const gchar *target,
+                                      gint file_fd,
+                                      gboolean force);
+
 G_END_DECLS
