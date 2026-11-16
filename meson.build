@@ -101,6 +101,15 @@ kqueue_test = executable('kqueue_frame_test',
 
 test('kqueue_frame', kqueue_test)
 
+frame_test = executable('frame_buffer_test',
+  files('tests/frame_buffer_test.c', 'daemon/zg-frame.c'),
+  dependencies: [glib_dep],
+  include_directories: include_directories('daemon'),
+  build_by_default: true,
+)
+
+test('frame_buffer', frame_test)
+
 executable('zfs-guid',
   files(
     'daemon/zfs-guid.c',
@@ -111,6 +120,7 @@ executable('zfs-guid',
     'daemon/zg-log.c',
     'daemon/zg-auth.c',
     'daemon/zg-libzfs-exec.c',
+    'daemon/zg-frame.c',
     'daemon/zg-helper.c',
     'daemon/zg-progress.c',
   ),

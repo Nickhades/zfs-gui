@@ -106,7 +106,38 @@ EV_SET(&kev, helper_fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, task);
 5. 迁移 receive_stream
 6. 最后删除 fork-per-connection 与阻塞 Helper 客户端
 
-## 8. 当前进度
+## 8. 实现进度
 
-- 本分支已建立，设计文档完成
-- 下一步先实现非阻塞帧缓冲与 kqueue 单元测试，再接入 send_stream
+- `daemon/zg-frame.[ch]`：非阻塞长度前缀帧缓冲
+  - 读循环遇 EAGAIN 立即返回，不阻塞
+  - `g_byte_array_remove_range` 处理粘包，避免无限拼接
+  - 单帧上限默认 1MB，超限返回错误（防 OOM）
+  - 输出缓冲支持部分写与 EAGAIN 重试
+- `tests/frame_buffer_test.c`：半包、粘包、取消帧、超长帧拒绝、部分写，全部 PASS
+- `tests/kqueue_frame_test.c`：kqueue + 非阻塞半包解析，全部 PASS
+- selftest 已包含两项测试
+
+## 9. 防御性细节清单（必须遵守）
+
+- 所有 socket 建立后 `fcntl(O_NONBLOCK)`
+- `close(fd)` 前先 `EV_DELETE` 对应 kevent
+- 每个连接维护独立 `ZgFrameBuffer`，不共享
+- CANCEL 状态：
+  - 收到 cancel → 写 CANCEL 帧 → `STATE_CANCELLING`
+  - 收到 Helper 最终帧 → 转发 → 清理
+  - client 先 EOF → orphan，等 Helper 结束后静默销毁
+  - CANCELLING 超过 10 秒 → 强制清理并审计
+- SIGCHLD：
+  - 使用 self-pipe，把信号写端注册到 kqueue
+  - 可读时 `waitpid(-1, NULL, WNOHANG)` 循环回收
+  - 禁止在信号处理函数里 waitpid/做复杂操作
+- 超时：`EVFILT_TIMER` 每 5 秒扫描任务表
+
+## 10. 下一步
+
+- `daemon/zg-task.[ch]`：task_entry + kqueue 循环（先 send_stream）
+- server 接入事件循环，保留旧路径直到验证通过
+- CANCEL 断言：
+  1. `pgrep zfs send` 消失
+  2. client 收到 `{"type":"canceled","req_id":...}`
+  3. Helper 关闭 fd、清理半文件
