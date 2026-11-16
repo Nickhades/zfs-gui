@@ -284,3 +284,33 @@ zfs list -t snapshot: zgtest/recv@s1
 
 当前 receive 尚未做 PROGRESS（Helper 侧未加代理计数），只上报最终状态；
 后续可在 Helper 读流循环里累加字节并复用 progress 帧。
+
+## 16. receive 进度代理（poll 版）
+
+Helper 不再把源 fd 直接塞给 zfs receive，而是：
+
+```
+源 fd --read--> Helper 缓冲区 --write--> pipe --stdin--> zfs receive
+```
+
+poll 同时监听：
+
+- control socket（CANCEL）
+- 源 fd（POLLIN，缓冲区空时）
+- pipe 写端（POLLOUT，有 pending 数据时）
+
+pipe 写端设为 `O_NONBLOCK`，`EAGAIN` 等下一次 POLLOUT；
+源 EOF 且 pending 清空后关闭 pipe 写端，zfs receive 才能收尾。
+
+实测 32MB：
+
+```
+PROGRESS 8388608
+PROGRESS 16777216
+PROGRESS 25165824
+PROGRESS 33554432
+{'ok': True, 'message': '已接收 33682504 字节'}
+zfs list: zgtest/recv@s1
+```
+
+取消路径：`setpgid(0,0)` + `kill(-pid, SIGTERM)`，关闭 pipe 写端。
