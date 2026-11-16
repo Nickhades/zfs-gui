@@ -83,3 +83,45 @@ unmount code=0 卸载成功
 - Helper 不解析复杂参数：数据集名白名单校验，`options` 仅作为 `-o` 参数
 - Helper 不跟随用户路径（未来 SCM_RIGHTS 由主进程打开文件）
 - 主进程仍保留白名单、参数校验、PAM 结果与审计日志
+
+## 8. SCM_RIGHTS 单元测试（已完成）
+
+`tests/scm_rights_test.c` 覆盖：
+
+- socketpair + `sendmsg` 传递 `/etc/passwd` fd
+- 子进程 `recvmsg(MSG_CMSG_CLOEXEC)` 后 `fstat`、读取内容
+- 接收 fd 的 `FD_CLOEXEC` 已由内核置位
+- 控制缓冲区过短时 `MSG_CTRUNC` 必须置位
+- 100 次 fd 传递后 fd 数量不变
+
+运行：
+
+```sh
+meson test -C build scm_rights
+# 或
+./build/scm_rights_test
+```
+
+实测：
+
+```
+PASS: child received fd and read file
+PASS: MSG_CTRUNC set for short cmsg buffer
+fd count: before=19 after=19
+SCM_RIGHTS: ALL PASS
+```
+
+注意：`CMSG_SPACE(4)` 与 `CMSG_SPACE(8)` 在 64 位对齐后可能相同，
+“故意截断”的测试必须用**非空但足够短**的控制缓冲区（例如 8 字节），
+否则内核根本不会截断。
+
+### 接入 send/receive 的协议草案
+
+1. 主进程在沙箱外打开文件 fd（`O_NOFOLLOW`，0600）
+2. 通过 `sendmsg` 发送 1 字节请求类型 + SCM_RIGHTS fd
+3. Helper 用 `recvmsg(MSG_CMSG_CLOEXEC)` 接收，检查 `MSG_CTRUNC`
+4. Helper 直接对 fd 执行 send/receive 流操作
+5. 主进程在 `sendmsg` 失败时自行 `close(fd)`；成功后可立即关闭本地 fd
+6. 所有 fd 均带 `O_CLOEXEC`，避免 exec 继承
+
+下一步在 Helper 协议中加入 `send_stream` / `receive_stream` 两种消息。

@@ -80,12 +80,19 @@ zgcommon_dep = declare_dependency(
 # ---------------------------------------------------------------------------
 # 后端：特权守护进程 zfs-guid
 # ---------------------------------------------------------------------------
+scm_test = executable('scm_rights_test',
+  files('tests/scm_rights_test.c'),
+  build_by_default: true,
+)
+
 executable('zfs-helper',
   files('helper/zfs-helper.c'),
   dependencies: [zgcommon_dep, glib_dep],
   install: true,
   install_dir: get_option('sbindir'),
 )
+
+test('scm_rights', scm_test)
 
 executable('zfs-guid',
   files(

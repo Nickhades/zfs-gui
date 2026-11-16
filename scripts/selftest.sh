@@ -96,6 +96,11 @@ done
 STATUS=0
 python3 tests/protocol_test.py "$SOCK" || STATUS=$?
 
+if [ -x "$ROOT/$BUILD/scm_rights_test" ]; then
+  echo "[selftest] SCM_RIGHTS fd 传递测试..."
+  "$ROOT/$BUILD/scm_rights_test" >/dev/null || STATUS=1
+fi
+
 if [ "$WITH_GUI" -eq 1 ]; then
   if [ -z "${DISPLAY:-}" ]; then
     echo "[selftest] 未设置 DISPLAY，跳过界面启动测试"
