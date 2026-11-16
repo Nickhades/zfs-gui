@@ -191,6 +191,71 @@ run_zfs(const gchar *op,
     return NULL;
 }
 
+static int
+recv_stream_fd(int sock)
+{
+    struct msghdr msg;
+    struct iovec iov;
+    char cbuf[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg;
+    char byte = 0;
+    int fd = -1;
+
+    memset(&msg, 0, sizeof(msg));
+    memset(cbuf, 0, sizeof(cbuf));
+    iov.iov_base = &byte;
+    iov.iov_len = 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cbuf;
+    msg.msg_controllen = sizeof(cbuf);
+
+    if (recvmsg(sock, &msg, MSG_CMSG_CLOEXEC) != 1)
+        return -1;
+
+    if (msg.msg_flags & MSG_CTRUNC)
+        return -1;
+
+    cmsg = CMSG_FIRSTHDR(&msg);
+    if (cmsg == NULL || cmsg->cmsg_level != SOL_SOCKET ||
+        cmsg->cmsg_type != SCM_RIGHTS ||
+        cmsg->cmsg_len != CMSG_LEN(sizeof(int)))
+        return -1;
+
+    memcpy(&fd, CMSG_DATA(cmsg), sizeof(fd));
+    return fd;
+}
+
+static gchar *
+run_send_stream(const gchar *snapshot,
+                int out_fd)
+{
+    pid_t pid;
+    int status = 0;
+
+    pid = fork();
+    if (pid < 0)
+        return g_strdup(g_strerror(errno));
+
+    if (pid == 0)
+    {
+        if (dup2(out_fd, STDOUT_FILENO) < 0)
+            _exit(126);
+
+        close(out_fd);
+        execl("/sbin/zfs", "zfs", "send", snapshot, (char *)NULL);
+        _exit(127);
+    }
+
+    waitpid(pid, &status, 0);
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return g_strdup_printf("zfs send 失败（exit=%d）",
+                               WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+
+    return NULL;
+}
+
 static void
 handle_client(int fd)
 {
@@ -203,6 +268,7 @@ handle_client(int fd)
         GError *error = NULL;
         const gchar *op;
         const gchar *dataset;
+        const gchar *snapshot;
         const gchar *options = "";
         gboolean force;
         gchar *message;
@@ -231,10 +297,45 @@ handle_client(int fd)
 
         op = zg_json_object_get_string(root, "op");
         dataset = zg_json_object_get_string(root, "dataset");
+        snapshot = zg_json_object_get_string(root, "snapshot");
         options = zg_json_object_get_string(root, "options");
         force = zg_json_object_get_bool(root, "force", FALSE);
 
-        if (op == NULL || dataset == NULL ||
+        if (op == NULL)
+        {
+            send_response(fd, FALSE, "请求参数非法");
+            zg_json_free(root);
+            continue;
+        }
+
+        if (g_strcmp0(op, "send_stream") == 0)
+        {
+            int out_fd;
+
+            if (snapshot == NULL || !zg_snapshot_name_valid(snapshot))
+            {
+                send_response(fd, FALSE, "快照名非法");
+                zg_json_free(root);
+                continue;
+            }
+
+            out_fd = recv_stream_fd(fd);
+            if (out_fd < 0)
+            {
+                send_response(fd, FALSE, "未收到有效的流文件 fd");
+                zg_json_free(root);
+                continue;
+            }
+
+            message = run_send_stream(snapshot, out_fd);
+            close(out_fd);
+            send_response(fd, message == NULL, message);
+            g_free(message);
+            zg_json_free(root);
+            continue;
+        }
+
+        if (dataset == NULL ||
             (g_strcmp0(op, "mount") != 0 && g_strcmp0(op, "unmount") != 0) ||
             !zg_dataset_name_valid(dataset))
         {
