@@ -193,3 +193,42 @@ relay --write--> client_peer[0] (自己这端) --> client_peer[1] (mock 读)
 - 把 `zg-task` 的 kqueue 循环按这个已验证的 relay 拓扑重写
 - 加入 4 个 socketpair 的 mock（client/helper 各一对，relay 端读写同一 fd）
 - mock 通过后再接真实 `zfs.send`，最后加 `pgrep zfs send` 断言
+
+## 13. 真凶：zg_frame_read 用了阻塞 read
+
+探针日志：
+
+```
+[task] KEVENT ident=6 filter=-1 flags=0 data=22
+[task] READ fd=6 rr=1 buffered=22 errno=0   # rr=EOF，但缓冲区里明明有 22 字节
+```
+
+原因：`zg_frame_read()` 内部用 `read()` 循环读取直到 EAGAIN，但 relay fd 仍是阻塞模式。
+第一次读到 22 字节后，循环再次 `read()` 直接阻塞，导致：
+
+- 后续 helper 帧无法处理
+- client 永远收不到 started/progress
+- task 最终在父进程关闭 socket 后才被 EOF 唤醒并退出
+
+修复：`zg_frame_read()` 改用
+
+```c
+recv(fd, temp, sizeof(temp), MSG_DONTWAIT)
+```
+
+这样即使 fd 没有设置 O_NONBLOCK，也能在读完当前数据后立即返回 AGAIN。
+这也解决了 Capsicum 下 `fcntl(F_SETFL)` 被拒绝的问题。
+
+修复后 `tests/kqueue_task_test.c` 全部通过：
+
+```
+task sends request+fd
+received fd valid
+helper started -> client started
+helper progress -> client progress
+client cancel -> helper cancel
+helper final -> client final
+task exits ok
+```
+
+selftest 已加入 `kqueue_task_test`。

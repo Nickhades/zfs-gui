@@ -119,6 +119,15 @@ echo_test = executable('kqueue_echo_test',
 
 test('kqueue_echo', echo_test)
 
+task_test = executable('kqueue_task_test',
+  files('tests/kqueue_task_test.c', 'daemon/zg-task.c', 'daemon/zg-frame.c', 'common/zg-json.c'),
+  dependencies: [glib_dep],
+  include_directories: include_directories('daemon', 'common'),
+  build_by_default: true,
+)
+
+test('kqueue_task', task_test)
+
 executable('zfs-guid',
   files(
     'daemon/zfs-guid.c',

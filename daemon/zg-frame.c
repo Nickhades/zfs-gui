@@ -6,6 +6,7 @@
 #include "zg-frame.h"
 
 #include <errno.h>
+#include <sys/socket.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -38,7 +39,7 @@ zg_frame_read(ZgFrameBuffer *buffer,
 
     for (;;)
     {
-        ssize_t n = read(fd, temp, sizeof(temp));
+        ssize_t n = recv(fd, temp, sizeof(temp), MSG_DONTWAIT);
 
         if (n > 0)
         {
