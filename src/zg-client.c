@@ -588,6 +588,27 @@ zg_client_call_finish(GAsyncResult *result)
 /* 流式调用（fd + progress 帧）                                               */
 /* ------------------------------------------------------------------------- */
 
+static GMutex stream_mutex;
+static gint active_stream_fd = -1;
+
+void zg_client_cancel_stream(void)
+{
+    g_mutex_lock(&stream_mutex);
+
+    if (active_stream_fd >= 0)
+        (void)shutdown(active_stream_fd, SHUT_RDWR);
+
+    g_mutex_unlock(&stream_mutex);
+}
+
+static void
+set_active_stream_fd(gint fd)
+{
+    g_mutex_lock(&stream_mutex);
+    active_stream_fd = fd;
+    g_mutex_unlock(&stream_mutex);
+}
+
 typedef struct
 {
     gchar *op;
@@ -678,6 +699,8 @@ perform_stream_call(const StreamCall *call,
         g_clear_error(&local_error);
         return result;
     }
+
+    set_active_stream_fd(fd);
 
     writer = zg_json_writer_new();
     zg_json_writer_begin_object(writer, NULL);
@@ -788,6 +811,7 @@ perform_stream_call(const StreamCall *call,
         break;
     }
 
+    set_active_stream_fd(-1);
     close(fd);
     return result;
 }

@@ -41,6 +41,11 @@ typedef struct
     GtkWidget *progress;
     GtkWidget *send_button;
     GtkWidget *recv_button;
+    GtkWidget *cancel_button;
+    guint64 pending_bytes;
+    gboolean has_progress;
+    gboolean cancel_requested;
+    guint progress_timer;
 } SendRecvPage;
 
 /* ------------------------------------------------------------------------- */
@@ -76,6 +81,24 @@ on_execute_done(GObject *source,
 
     g_string_append_printf(text, "\n$ %s\n", context->command);
 
+    if (context->page->cancel_requested)
+    {
+        g_string_append(text, "[已取消] 用户中止了流任务\n");
+        append_output(context->page, text->str);
+        zg_app_set_status(context->page->app, "%s 已取消", context->command);
+        if (context->page->progress != NULL)
+            gtk_widget_set_visible(context->page->progress, FALSE);
+        if (context->page->send_button != NULL)
+            gtk_widget_set_sensitive(context->page->send_button, TRUE);
+        if (context->page->recv_button != NULL)
+            gtk_widget_set_sensitive(context->page->recv_button, TRUE);
+        g_string_free(text, TRUE);
+        zg_client_result_free(response);
+        g_free(context->command);
+        g_free(context);
+        return;
+    }
+
     if (response == NULL)
     {
         g_string_append(text, "[失败] 后台服务无应答\n");
@@ -105,6 +128,9 @@ on_execute_done(GObject *source,
     zg_app_set_status(context->page->app, "%s %s", context->command,
                       (response != NULL && response->ok) ? "已完成" : "失败");
 
+    if (context->page->cancel_button != NULL)
+        gtk_widget_set_visible(context->page->cancel_button, FALSE);
+
     if (context->page->send_button != NULL)
         gtk_widget_set_sensitive(context->page->send_button, TRUE);
     if (context->page->recv_button != NULL)
@@ -125,21 +151,47 @@ on_execute_done(GObject *source,
     g_free(context);
 }
 
+static gboolean
+update_progress_ui(gpointer data)
+{
+    SendRecvPage *page = data;
+
+    if (!page->has_progress || page->progress == NULL)
+        return G_SOURCE_CONTINUE;
+
+    {
+        gchar *text = g_strdup_printf("已传输 %.2f MiB",
+                                      (double)page->pending_bytes / (1024.0 * 1024.0));
+
+        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress), text);
+        gtk_progress_bar_pulse(GTK_PROGRESS_BAR(page->progress));
+        g_free(text);
+    }
+
+    page->has_progress = FALSE;
+    return G_SOURCE_CONTINUE;
+}
+
 static void
 on_stream_progress(guint64 bytes,
                    gpointer user_data)
 {
     SendRecvPage *page = user_data;
-    gchar *text;
 
-    if (page->progress == NULL)
-        return;
+    page->pending_bytes = bytes;
+    page->has_progress = TRUE;
+}
 
-    text = g_strdup_printf("已传输 %.2f MiB", (double)bytes / (1024.0 * 1024.0));
-    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress), text);
-    gtk_progress_bar_pulse(GTK_PROGRESS_BAR(page->progress));
-    gtk_widget_set_visible(page->progress, TRUE);
-    g_free(text);
+static void
+on_cancel_clicked(GtkButton *button,
+                  gpointer user_data)
+{
+    SendRecvPage *page = user_data;
+
+    page->cancel_requested = TRUE;
+    gtk_button_set_label(button, "正在取消…");
+    gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
+    zg_client_cancel_stream();
 }
 
 static void
@@ -161,6 +213,17 @@ execute_stream(SendRecvPage *page,
 
         append_output(page, notice);
         g_free(notice);
+    }
+
+    page->pending_bytes = 0;
+    page->has_progress = FALSE;
+    page->cancel_requested = FALSE;
+
+    if (page->cancel_button != NULL)
+    {
+        gtk_button_set_label(GTK_BUTTON(page->cancel_button), "取消");
+        gtk_widget_set_sensitive(page->cancel_button, TRUE);
+        gtk_widget_set_visible(page->cancel_button, TRUE);
     }
 
     if (page->progress != NULL)
@@ -755,10 +818,23 @@ zg_page_sendrecv_new(ZgApp *app)
                    zg_ui_button("清空输出", G_CALLBACK(on_clear_output), page));
     gtk_box_append(GTK_BOX(content), output_row);
 
-    page->progress = gtk_progress_bar_new();
-    gtk_progress_bar_set_show_text(GTK_PROGRESS_BAR(page->progress), TRUE);
-    gtk_widget_set_visible(page->progress, FALSE);
-    gtk_box_append(GTK_BOX(content), page->progress);
+    {
+        GtkWidget *progress_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+
+        page->progress = gtk_progress_bar_new();
+        gtk_widget_set_hexpand(page->progress, TRUE);
+        gtk_progress_bar_set_show_text(GTK_PROGRESS_BAR(page->progress), TRUE);
+        gtk_widget_set_visible(page->progress, FALSE);
+        gtk_box_append(GTK_BOX(progress_row), page->progress);
+
+        page->cancel_button = zg_ui_button("取消", G_CALLBACK(on_cancel_clicked), page);
+        gtk_widget_set_visible(page->cancel_button, FALSE);
+        gtk_box_append(GTK_BOX(progress_row), page->cancel_button);
+
+        gtk_box_append(GTK_BOX(content), progress_row);
+    }
+
+    page->progress_timer = g_timeout_add(100, update_progress_ui, page);
 
     output_scrolled = zg_ui_text_view_new(&page->output_buffer, TRUE);
     gtk_widget_set_size_request(output_scrolled, -1, 240);
