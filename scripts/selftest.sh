@@ -111,6 +111,11 @@ if [ -x "$ROOT/$BUILD/frame_buffer_test" ]; then
   "$ROOT/$BUILD/frame_buffer_test" >/dev/null || STATUS=1
 fi
 
+if [ -x "$ROOT/$BUILD/kqueue_echo_test" ]; then
+  echo "[selftest] kqueue 双工 relay 测试..."
+  "$ROOT/$BUILD/kqueue_echo_test" >/dev/null || STATUS=1
+fi
+
 if [ "$WITH_GUI" -eq 1 ]; then
   if [ -z "${DISPLAY:-}" ]; then
     echo "[selftest] 未设置 DISPLAY，跳过界面启动测试"

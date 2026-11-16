@@ -141,3 +141,55 @@ EV_SET(&kev, helper_fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, task);
   1. `pgrep zfs send` 消失
   2. client 收到 `{"type":"canceled","req_id":...}`
   3. Helper 关闭 fd、清理半文件
+
+## 11. kqueue 双工 Echo 验证（已通过）
+
+`tests/kqueue_echo_test.c` 现在覆盖完整的最小 relay：
+
+1. helper 写 started/progress → relay 转发给 client
+2. client 写 cancel → relay 转发给 helper
+3. helper 写 final → relay 转发给 client
+
+全部 PASS。
+
+### 之前 hang 的真正原因（ktrace 结论）
+
+ktrace 显示：
+
+```
+read(3) = 35        # helper 帧长度+JSON
+kevent(...)         # 已注册 EVFILT_READ
+write(4, 35)        # 转发给 client
+```
+
+syscall 层没有卡在 kevent；问题在 mock 拓扑：
+
+- 旧测试把 relay 输出写到 **peer 端 fd**（`client_peer[1]`），而 kqueue 监听的是
+  `client_peer[0]`
+- 于是 relay 自己写出的数据会出现在被监听的 fd 上，产生“自己发给自己”的事件，
+  真正的 client 请求反而被混淆
+- 真实 duplex socket 中，relay 应当向**自己这一端的 fd**写（数据流向 peer），
+  而不是向 peer fd 写
+
+修正拓扑后：
+
+```
+helper_peer[1] --write--> helper_peer[0] (relay read)
+relay --write--> client_peer[0] (自己这端) --> client_peer[1] (mock 读)
+```
+
+### 另一个坑：半帧只处理一次
+
+`relay_one` 第一版只做一次 `zg_frame_read + pop`；如果只读到长度或半个 JSON，
+就直接返回失败。正确做法是：
+
+- `pop == 0` → 继续等下一次 kevent，不要当作错误
+- 直到 `pop == 1` 才转发
+
+这对应真实 task 中的“缓冲区保留半包、等待下一次 EVFILT_READ”。
+
+## 12. 下一步
+
+- 把 `zg-task` 的 kqueue 循环按这个已验证的 relay 拓扑重写
+- 加入 4 个 socketpair 的 mock（client/helper 各一对，relay 端读写同一 fd）
+- mock 通过后再接真实 `zfs.send`，最后加 `pgrep zfs send` 断言

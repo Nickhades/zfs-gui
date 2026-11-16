@@ -110,6 +110,15 @@ frame_test = executable('frame_buffer_test',
 
 test('frame_buffer', frame_test)
 
+echo_test = executable('kqueue_echo_test',
+  files('tests/kqueue_echo_test.c', 'daemon/zg-frame.c'),
+  dependencies: [glib_dep],
+  include_directories: include_directories('daemon'),
+  build_by_default: true,
+)
+
+test('kqueue_echo', echo_test)
+
 executable('zfs-guid',
   files(
     'daemon/zfs-guid.c',
