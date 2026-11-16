@@ -254,7 +254,8 @@ run_send_stream(int control_fd,
                 const gchar *snapshot,
                 int out_fd,
                 guint32 req_id,
-                gboolean *canceled)
+                gboolean *canceled,
+                gboolean *ok)
 {
     int pipefd[2];
     pid_t pid;
@@ -266,6 +267,7 @@ run_send_stream(int control_fd,
     gboolean stop = FALSE;
 
     *canceled = FALSE;
+    *ok = FALSE;
 
     if (pipe(pipefd) != 0)
         return g_strdup(g_strerror(errno));
@@ -382,6 +384,7 @@ run_send_stream(int control_fd,
         return g_strdup_printf("zfs send 失败（exit=%d）",
                                WIFEXITED(status) ? WEXITSTATUS(status) : -1);
 
+    *ok = TRUE;
     return g_strdup_printf("已发送 %" G_GUINT64_FORMAT " 字节", total);
 }
 
@@ -570,11 +573,12 @@ handle_client(int fd)
 
             {
                 gboolean canceled = FALSE;
+                gboolean ok = FALSE;
                 gint64 req_id = zg_json_object_get_int(root, "req_id", 0);
 
                 message = run_send_stream(fd, snapshot, out_fd, (guint32)req_id,
-                                          &canceled);
-                send_response(fd, message != NULL && !canceled, message);
+                                          &canceled, &ok);
+                send_response(fd, ok && !canceled, message);
                 if (canceled)
                     break;
             }
