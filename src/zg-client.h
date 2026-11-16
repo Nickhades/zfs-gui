@@ -77,6 +77,8 @@ void zg_client_call_async_auth(const gchar *op,
 typedef void (*ZgClientProgressFunc)(guint64 bytes, gpointer user_data);
 
 /* 带 fd 与进度帧的流式调用：send 传可写 fd，receive 传只读 fd */
+void zg_client_cancel_stream(void);
+
 void zg_client_call_stream_async(const gchar *op,
                                  gchar *args_json,
                                  const gchar *file_path,
