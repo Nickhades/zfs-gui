@@ -51,7 +51,16 @@ GtkWidget *zg_table_new_flat(GListStore *store,
                              guint n_cols);
 GtkWidget *zg_table_new_tree(GListStore *store,
                              const ZgTableColumn *cols,
-                             guint n_cols);
+                             guint n_cols,
+                             gboolean autoexpand);
+
+/* 用于在层级树中按名称路径定位并选中一行（只展开路径上的父级） */
+typedef const gchar *(*ZgTableNameFunc)(ZgRow *row);
+
+void zg_table_reveal_path(GtkWidget *table,
+                          const gchar *const *names,
+                          guint n_names,
+                          ZgTableNameFunc name_func);
 
 GtkSelectionModel *zg_table_get_selection(GtkWidget *table);
 ZgRow *zg_table_get_selected(GtkWidget *table); /* transfer none */

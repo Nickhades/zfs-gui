@@ -137,7 +137,7 @@ build_row(const ZgOpDef *op)
 
     if (op->auth == ZG_AUTH_PASSWORD)
     {
-        GtkWidget *lock = gtk_image_new_from_icon_name("channel-secure-symbolic");
+        GtkWidget *lock = gtk_image_new_from_icon_name("zg-secure-symbolic");
 
         gtk_image_set_pixel_size(GTK_IMAGE(lock), 12);
         gtk_widget_set_tooltip_text(lock, "需要管理员密码");

@@ -146,6 +146,9 @@ int main(int argc, char **argv)
     pidfile = (opt_pidfile != NULL) ? opt_pidfile : ZG_PID_PATH_DEFAULT;
     write_pidfile(pidfile);
 
+    if (zg_policy_strict_mode(policy))
+        g_setenv("ZFS_GUI_LIBZFS_EXEC", "1", TRUE);
+
     zg_log_info("zfs-guid %s 启动（协议 v%d）", ZG_DAEMON_VERSION, ZG_PROTOCOL_VERSION);
 
     status = zg_server_run(policy);

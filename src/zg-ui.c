@@ -344,6 +344,11 @@ void zg_ui_init(void)
 
     apply_desktop_theme();
 
+    /* 使用内置图标（编译进二进制的 GResource），不依赖系统图标主题 */
+    gtk_icon_theme_add_resource_path(
+            gtk_icon_theme_get_for_display(gdk_display_get_default()),
+            "/org/freebsd/zfsgui/icons");
+
     gtk_css_provider_load_from_data(provider, zg_css, -1);
     gtk_style_context_add_provider_for_display(gdk_display_get_default(),
                                                GTK_STYLE_PROVIDER(provider),
@@ -402,44 +407,44 @@ static const struct
     const gchar *keyword;
     const gchar *icon;
 } zg_icon_map[] = {
-        {"创建快照", "camera-photo-symbolic"},
-        {"创建", "list-add-symbolic"},
-        {"新建", "list-add-symbolic"},
-        {"导入", "document-open-symbolic"},
-        {"导出", "document-save-symbolic"},
-        {"销毁", "edit-delete-symbolic"},
-        {"删除", "edit-delete-symbolic"},
-        {"刷新", "view-refresh-symbolic"},
-        {"清空", "edit-clear-symbolic"},
-        {"清除", "edit-clear-symbolic"},
-        {"scrub", "security-high-symbolic"},
-        {"TRIM", "user-trash-symbolic"},
-        {"挂载", "media-playback-start-symbolic"},
-        {"卸载", "media-playback-stop-symbolic"},
-        {"密钥", "channel-secure-symbolic"},
-        {"加密", "channel-secure-symbolic"},
-        {"委派", "system-users-symbolic"},
-        {"回滚", "edit-undo-symbolic"},
-        {"克隆", "edit-copy-symbolic"},
-        {"发送", "document-send-symbolic"},
-        {"接收", "document-save-symbolic"},
-        {"差异", "edit-find-symbolic"},
-        {"hold", "bookmark-new-symbolic"},
-        {"release", "bookmark-new-symbolic"},
-        {"书签", "bookmark-new-symbolic"},
-        {"激活", "emblem-ok-symbolic"},
-        {"重命名", "document-edit-symbolic"},
-        {"全部操作", "view-more-symbolic"},
-        {"更多", "view-more-symbolic"},
-        {"编辑属性", "document-edit-symbolic"},
-        {"开始", "media-playback-start-symbolic"},
-        {"取消", "process-stop-symbolic"},
-        {"关闭", "window-close-symbolic"},
-        {"重新连接", "network-transmit-receive-symbolic"},
-        {"关于", "help-about-symbolic"},
-        {"提示", "dialog-information-symbolic"},
-        {"验证", "channel-secure-symbolic"},
-        {"快照", "camera-photo-symbolic"},
+        {"创建快照", "zg-snapshot-symbolic"},
+        {"创建", "zg-add-symbolic"},
+        {"新建", "zg-add-symbolic"},
+        {"导入", "zg-open-symbolic"},
+        {"导出", "zg-backup-symbolic"},
+        {"销毁", "zg-trash-symbolic"},
+        {"删除", "zg-trash-symbolic"},
+        {"刷新", "zg-refresh-symbolic"},
+        {"清空", "zg-clear-symbolic"},
+        {"清除", "zg-clear-symbolic"},
+        {"scrub", "zg-security-symbolic"},
+        {"TRIM", "zg-trash-symbolic"},
+        {"挂载", "zg-run-symbolic"},
+        {"卸载", "zg-stop-symbolic"},
+        {"密钥", "zg-secure-symbolic"},
+        {"加密", "zg-secure-symbolic"},
+        {"委派", "zg-users-symbolic"},
+        {"回滚", "zg-undo-symbolic"},
+        {"克隆", "zg-copy-symbolic"},
+        {"发送", "zg-send-symbolic"},
+        {"接收", "zg-backup-symbolic"},
+        {"差异", "zg-search-symbolic"},
+        {"hold", "zg-bookmark-symbolic"},
+        {"release", "zg-bookmark-symbolic"},
+        {"书签", "zg-bookmark-symbolic"},
+        {"激活", "zg-ok-symbolic"},
+        {"重命名", "zg-edit-symbolic"},
+        {"全部操作", "zg-more-symbolic"},
+        {"更多", "zg-more-symbolic"},
+        {"编辑属性", "zg-edit-symbolic"},
+        {"开始", "zg-run-symbolic"},
+        {"取消", "zg-cancel-symbolic"},
+        {"关闭", "zg-close-symbolic"},
+        {"重新连接", "zg-sendrecv-symbolic"},
+        {"关于", "zg-about-symbolic"},
+        {"提示", "zg-info-symbolic"},
+        {"验证", "zg-secure-symbolic"},
+        {"快照", "zg-snapshot-symbolic"},
 };
 
 static const gchar *
@@ -476,6 +481,7 @@ zg_ui_button(const gchar *label,
         GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         GtkWidget *image = gtk_image_new_from_icon_name(icon);
 
+        gtk_image_set_pixel_size(GTK_IMAGE(image), 16);
         gtk_widget_set_valign(image, GTK_ALIGN_CENTER);
         gtk_box_append(GTK_BOX(box), image);
         gtk_box_append(GTK_BOX(box), gtk_label_new(label));

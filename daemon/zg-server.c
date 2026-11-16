@@ -16,6 +16,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/capsicum.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -33,6 +34,24 @@
 #include "zg-ops.h"
 #include "zg-protocol.h"
 #include "zg-util.h"
+
+/* syslog 不保证处理 UTF-8：审计字段统一转成可打印 ASCII */
+static gchar *
+audit_sanitize(const gchar *text)
+{
+    GString *out = g_string_new(NULL);
+    const guchar *p = (const guchar *)(text != NULL ? text : "");
+
+    for (; *p != '\0'; p++)
+    {
+        if (*p >= 0x20 && *p < 0x7f)
+            g_string_append_c(out, (gchar)*p);
+        else
+            g_string_append_c(out, '?');
+    }
+
+    return g_string_free(out, FALSE);
+}
 
 #define ZG_MAX_CHILDREN 64
 #define ZG_REQUEST_TIMEOUT 60
@@ -111,6 +130,24 @@ reap_children(guint *active_children)
  * 但不允许列出目录内容；真正的访问控制由 socket 的 0660 与
  * allowed_users / allowed_groups 完成。 */
 #define ZG_SOCKET_DIR_MODE 0711
+
+/* 限制 fd 权利（Capsicum 的 fd 级加固；不进入 cap_enter） */
+static void
+limit_rights(int fd,
+             gboolean listener,
+             const gchar *what)
+{
+    cap_rights_t rights;
+
+    if (listener)
+        cap_rights_init(&rights, CAP_ACCEPT, CAP_EVENT, CAP_GETSOCKOPT,
+                        CAP_LISTEN, CAP_READ, CAP_WRITE);
+    else
+        cap_rights_init(&rights, CAP_READ, CAP_WRITE, CAP_EVENT, CAP_GETSOCKOPT);
+
+    if (cap_rights_limit(fd, &rights) != 0)
+        zg_log_warning("cap_rights_limit(%s) 失败：%s", what, g_strerror(errno));
+}
 
 static int
 create_listen_socket(const ZgPolicy *policy)
@@ -308,7 +345,7 @@ handle_client(int fd,
     {
         gchar *message = g_strdup_printf("未授权的操作：%s", op_id);
 
-        zg_log_warning("uid=%u 请求未登记的操作 %s，已拒绝",
+        zg_log_warning("AUDIT uid=%u op=%s result=reject reason=unregistered",
                        (guint)peer_uid, op_id);
         send_error(fd, -1, message);
         g_free(message);
@@ -329,7 +366,14 @@ handle_client(int fd,
         gchar *message = g_strdup_printf("参数校验失败：%s",
                                          error != NULL ? error->message : "未知原因");
 
-        zg_log_warning("uid=%u 操作 %s 参数校验失败", (guint)peer_uid, op->id);
+        {
+            gchar *audit_detail = audit_sanitize(
+                    error != NULL ? error->message : "unknown");
+
+            zg_log_warning("AUDIT uid=%u op=%s result=reject reason=validation detail=%s",
+                           (guint)peer_uid, op->id, audit_detail);
+            g_free(audit_detail);
+        }
         send_error(fd, -1, message);
         g_free(message);
         goto out;
@@ -346,7 +390,8 @@ handle_client(int fd,
 
         if (zg_str_is_empty(auth_user) || auth_pass == NULL || auth_pass[0] == '\0')
         {
-            zg_log_warning("uid=%u 请求危险操作 %s 但未提供密码", (guint)peer_uid, op->id);
+            zg_log_warning("AUDIT uid=%u op=%s result=reject reason=auth_missing",
+                           (guint)peer_uid, op->id);
             send_error(fd, ZG_ERR_AUTH_REQUIRED,
                        "该操作属于危险操作，需要管理员密码重新验证。");
             goto out;
@@ -366,19 +411,25 @@ handle_client(int fd,
             else
                 code = ZG_ERR_AUTH_FAILED;
 
+            zg_log_warning("AUDIT uid=%u op=%s result=reject reason=auth_failed user=%s",
+                           (guint)peer_uid, op->id,
+                           auth_user != NULL ? auth_user : "?");
             send_error(fd, code,
                        auth_message != NULL ? auth_message : "身份验证失败");
             g_free(auth_message);
             goto out;
         }
 
+        zg_log_info("AUDIT uid=%u op=%s auth=ok user=%s",
+                    (guint)peer_uid, op->id, auth_user);
         g_free(auth_message);
     }
 
     {
         gchar *description = zg_op_describe(op, request);
 
-        zg_log_info("uid=%u 执行 %s", (guint)peer_uid, description);
+        zg_log_info("AUDIT uid=%u op=%s result=start cmd=\"%s\"",
+                    (guint)peer_uid, op->id, description);
         g_free(description);
     }
 
@@ -391,10 +442,23 @@ handle_client(int fd,
     }
 
     if (outcome->ok)
-        zg_log_info("操作 %s 完成（%d ms）", op->id, (int)outcome->duration_ms);
+    {
+        zg_log_info("AUDIT uid=%u op=%s result=ok code=%d ms=%d",
+                    (guint)peer_uid, op->id, (int)outcome->code,
+                    (int)outcome->duration_ms);
+    }
     else
-        zg_log_warning("操作 %s 失败：%s", op->id,
-                       outcome->message != NULL ? outcome->message : "未知原因");
+    {
+        {
+            gchar *audit_detail = audit_sanitize(
+                    outcome->message != NULL ? outcome->message : "unknown");
+
+            zg_log_warning("AUDIT uid=%u op=%s result=fail code=%d ms=%d detail=%s",
+                           (guint)peer_uid, op->id, (int)outcome->code,
+                           (int)outcome->duration_ms, audit_detail);
+            g_free(audit_detail);
+        }
+    }
 
     send_response(fd,
                   outcome->ok,
@@ -438,6 +502,8 @@ int zg_server_run(const ZgPolicy *policy)
 
     if (server_fd < 0)
         return -1;
+
+    limit_rights(server_fd, TRUE, "listen");
 
     zg_log_info("守护进程已启动，监听 %s（用户 %s / 组 %s）",
                 zg_policy_socket_path(policy),
@@ -560,6 +626,7 @@ int zg_server_run(const ZgPolicy *policy)
                 signal(SIGCHLD, SIG_DFL);
                 signal(SIGPIPE, SIG_IGN);
 
+                limit_rights(client_fd, FALSE, "connection");
                 handle_client(client_fd, policy, uid);
 
                 close(client_fd);

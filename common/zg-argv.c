@@ -217,6 +217,105 @@ zg_op_request_parse(const ZgJson *args,
 /* 校验                                                                       */
 /* ------------------------------------------------------------------------- */
 
+static gboolean property_key_valid(const char *key);
+
+static gboolean
+has_control_chars(const char *value)
+{
+    const unsigned char *p = (const unsigned char *)value;
+
+    for (; *p != '\0'; p++)
+    {
+        if (*p < 0x20 || *p == 0x7f)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static gboolean
+path_value_valid(const char *value)
+{
+    if (value == NULL || value[0] != '/' ||
+        strlen(value) > ZG_MAX_ARG_LENGTH)
+        return FALSE;
+
+    /* 拒绝 .. 路径片段与任何控制字符 */
+    if (strstr(value, "..") != NULL)
+        return FALSE;
+
+    return !has_control_chars(value);
+}
+
+static gboolean
+size_value_valid(const char *value)
+{
+    const char *p = value;
+    gboolean digits = FALSE;
+
+    if (value == NULL || value[0] == '\0' || value[0] == '-')
+        return FALSE;
+
+    if (g_strcmp0(value, "none") == 0 || g_strcmp0(value, "on") == 0 ||
+        g_strcmp0(value, "off") == 0)
+        return TRUE;
+
+    while (g_ascii_isdigit(*p))
+    {
+        digits = TRUE;
+        p++;
+    }
+
+    if (*p == '.')
+    {
+        p++;
+        if (!g_ascii_isdigit(*p))
+            return FALSE;
+        while (g_ascii_isdigit(*p))
+            p++;
+    }
+
+    if (!digits)
+        return FALSE;
+
+    if (*p == '\0')
+        return TRUE;
+
+    if (strchr("KkMmGgTtPpEe", *p) != NULL && p[1] == '\0')
+        return TRUE;
+
+    if (*p == '%' && p[1] == '\0')
+        return TRUE;
+
+    return FALSE;
+}
+
+static gboolean
+property_value_valid(const char *value)
+{
+    const char *equals;
+    gchar *key;
+    gboolean valid;
+
+    if (value == NULL || value[0] == '\0' || value[0] == '-' ||
+        has_control_chars(value))
+        return FALSE;
+
+    equals = strchr(value, '=');
+
+    if (equals == NULL)
+        return property_key_valid(value);
+
+    if (equals == value)
+        return FALSE;
+
+    key = g_strndup(value, (gsize)(equals - value));
+    valid = property_key_valid(key);
+    g_free(key);
+
+    return valid;
+}
+
 gboolean
 zg_value_valid(ZgValueKind kind,
                const char *value)
@@ -252,22 +351,21 @@ zg_value_valid(ZgValueKind kind,
         return zg_user_name_valid(value);
 
     case ZG_VALUE_PATH:
-        return value[0] != '-' && value[0] != '\0';
+        return path_value_valid(value);
 
     case ZG_VALUE_NUMBER:
         return zg_parse_u64(value, &number);
 
     case ZG_VALUE_SIZE:
-        /* 允许 10G / 512M / 1024 / 0 / 50% 等 */
-        return value[0] != '-' && value[0] != '\0';
+        return size_value_valid(value);
 
     case ZG_VALUE_PROPERTY:
-        /* property=value 或裸属性名 */
-        return value[0] != '-' && value[0] != '\0';
+        return property_value_valid(value);
 
     case ZG_VALUE_FREE:
     default:
-        return value[0] != '-' && value[0] != '\0';
+        return value[0] != '-' && value[0] != '\0' &&
+               !has_control_chars(value);
     }
 }
 
@@ -448,10 +546,11 @@ zg_op_request_validate(const ZgOpDef *op,
             return FALSE;
         }
 
-        if (request->io_path[0] != '/')
+        if (!path_value_valid(request->io_path))
         {
             g_set_error(error, ZG_JSON_ERROR, ZG_JSON_ERROR_USAGE,
-                        "操作 %s 的重定向路径必须是绝对路径", op->id);
+                        "操作 %s 的重定向路径非法（必须是绝对路径，且不能包含 ..）",
+                        op->id);
             return FALSE;
         }
     }

@@ -321,7 +321,7 @@ static const ZgOpDef zg_operations[] = {
                         .flags = F("-a", "-e", "-s", "-p", "-C", "-w"),
                         .options = (const char *const[]){"E", "S", NULL},
                         .min_positional = 0,
-                        .max_positional = 0,
+                        .max_positional = 1,
                         .kinds = {ZG_VALUE_POOL},
                 },
         },
@@ -338,7 +338,7 @@ static const ZgOpDef zg_operations[] = {
                         .flags = F("-a", "-d", "-w", "-c", "-s"),
                         .options = (const char *const[]){"r", NULL},
                         .min_positional = 0,
-                        .max_positional = 0,
+                        .max_positional = 1,
                         .kinds = {ZG_VALUE_POOL},
                 },
         },
@@ -1073,7 +1073,7 @@ static const ZgOpDef zg_operations[] = {
                 .io = ZG_OP_IO_IN_FILE,
                 .io_arg = "input",
                 .spec = {
-                        .flags = F("-v", "-M", "-n", "-s", "-F", "-h", "-u"),
+                        .flags = F("-v", "-M", "-n", "-s", "-F", "-h", "-u", "-d", "-e"),
                         .options = (const char *const[]){"o", "x", NULL},
                         .min_positional = 1,
                         .max_positional = 1,
@@ -1341,6 +1341,20 @@ static const ZgOpDef zg_operations[] = {
         /* ====================================================================== */
         /* 系统信息                                                                */
         /* ====================================================================== */
+        {
+                .id = "backup.unlink",
+                .tool = NULL,
+                .title = "删除备份文件",
+                .description = "删除系统备份目录中的 .zfs 流文件（危险操作，需要管理员密码）。",
+                .category = ZG_CAT_SENDRECV,
+                .auth = ZG_AUTH_PASSWORD,
+                .destructive = TRUE,
+                .spec = {
+                        .min_positional = 1,
+                        .max_positional = 1,
+                        .kinds = {ZG_VALUE_PATH},
+                },
+        },
         {
                 .id = "system.info",
                 .tool = NULL,

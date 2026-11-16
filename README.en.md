@@ -62,7 +62,7 @@ semantic wizard (pick disks, choose a layout, enter a quota, …); **no command
 line parameters are ever typed**.
 
 Keyboard: `Enter` primary action, `Delete` destroy, `F2` rename, `F5` refresh,
-`Ctrl+Q` quit, `Alt+1..8` switch pages. The window has self-drawn
+`Ctrl+Q` quit, `Alt+1..9` switch pages. The window has self-drawn
 minimize/maximize/close buttons that work under any theme.
 
 The layout is **sidebar navigation + content area**: six functional pages plus
@@ -212,7 +212,71 @@ Installed files:
 | `/usr/local/share/man/man8/zfs-guid.8` | manual page |
 | `/etc/pam.d/zfs-gui` | PAM service for re-authentication |
 
-### 3.6 Building a FreeBSD `.pkg`
+### 3.6 Optional libzfs read path
+
+```sh
+meson setup build -Dlibzfs=enabled    # auto (default) / enabled / disabled
+```
+
+At startup the GUI tries `dlopen("libzfs.so.7")`. If available it reads the
+dataset list directly through libzfs; otherwise it falls back to the daemon.
+The binary is **not linked** against libzfs, so it still runs on systems without
+that library. `ZFS_GUI_NO_LIBZFS=1` forces the fallback and
+`ZFS_GUI_LIBZFS=/path/libzfs.so.7` overrides the library path.
+
+### 3.7 Experimental: libzfs executor (Phase B1)
+
+The daemon can execute a subset of dataset write operations through libzfs;
+unsupported argument combinations automatically fall back to the command line.
+Disabled by default. Enable with:
+
+```sh
+sysrc zfsguid_libzfs_exec=YES
+service zfsguid restart
+```
+
+Covered:
+
+- Datasets: `zfs.create` (`-p`/`-o`), `zfs.destroy` (`-r` recursive),
+  `zfs.rename` (`-f/-u/-r/-p`), `zfs.set` (single property),
+  `zfs.snapshot` (`-r`/`-o`), `zfs.rollback`, `zfs.clone` (`-p`/`-o`)
+- Pools: `zpool.create` (stripe/mirror/raidz1-3, `-o ashift=`), `zpool.add`,
+  `zpool.remove`, `zpool.destroy`, `zpool.export` (`-f`), `zpool.scrub`
+  (`-s`/`-p`), `zpool.trim` (`-c`/`-s`/`-w`/`-d`/`-r`), `zpool.online`,
+  `zpool.offline` (`-t`)
+- The pools page vdev tree, health, R/W/C errors and capacities are synthesized
+  from libzfs `zpool_get_config()` / `vdev_stats`, not by parsing `zpool status` text
+- Send/receive (B3): `zfs.send` uses `zfs_send()` (`-i` incremental, `-I`
+  intermediate, `-R` recursive, `-c`/`-p`/`-h`/`-P`/`-v`); `zfs.receive` uses
+  `zfs_receive()` (`-F`/`-n`/`-u`/`-v`/`-d`/`-e`, `-o property=value`). Stream
+  files are opened with `O_NOFOLLOW`; send progress still polls file size.
+  `-x`, dry-run send and resume tokens fall back to the CLI
+- Encryption (B4): `zfs.load-key` (`-n`/`-L`), `zfs.unload-key` and
+  `zfs.change-key` (`-i`/`-o keyformat=...`) use `zfs_crypto_load_key()` /
+  `zfs_crypto_unload_key()` / `zfs_crypto_rewrap()`; `zfs.create` with
+  `-o encryption=... -o keyformat=... -o keylocation=...` is also created via
+  libzfs. Delegation (`zfs.allow/unallow`) has no public high-level libzfs API
+  and stays on the CLI; quotas are set through the libzfs `zfs.set` path
+
+Unsupported argument combinations (e.g. `-R/-n` recursive destroy, `-O/-m/-f`
+on pool creation, `zpool.clear`, attach/replace) fall back to the original
+`execv` path. `ZFS_GUI_LIBZFS_EXEC=1` is equivalent.
+
+### 3.8 Strict mode and fd hardening
+
+The daemon applies `cap_rights_limit()` to the listening socket and connection
+fds (without entering `cap_enter`), keeping only the rights needed for
+accept/read/write/poll/getsockopt.
+
+With `strict_mode = on`:
+
+- only operations already migrated to libzfs are allowed; everything else is
+  rejected instead of falling back to `execv`
+- the libzfs executor is enabled automatically (`ZFS_GUI_LIBZFS_EXEC=1`)
+- useful for validating the no-exec path; bectl, attach/replace, etc. become
+  unavailable
+
+### 3.9 Building a FreeBSD `.pkg`
 
 ```sh
 sh packaging/build-pkg.sh            # build + package
@@ -366,19 +430,42 @@ automatically and reports success when done.
 Output is streamed to the text box at the bottom; `-F` also requires a
 destructive-action confirmation.
 
-### 5.7 Boot environments (FreeBSD)
+### 5.7 System backup
+
+The **System backup** page backs up the whole system to an external disk:
+
+* **Prepare**: create a ZFS pool on the external disk (e.g. `backup`, mountpoint
+  `/backup`) and select that mountpoint as the backup directory.
+* **Full backup**: choose the source pool (usually `zroot`) and click
+  "Full backup". It creates a recursive `zroot@sys-<timestamp>` snapshot and
+  sends it with `-R` to `full-<timestamp>.zfs`, showing live progress.
+* **Incremental backup**: after changing the system, click "Incremental
+  backup"; it automatically uses the last successful snapshot as the base
+  (`-i`) and writes `inc-<timestamp>.zfs`.
+* **List / delete / restore**: the list shows name, size and time; deleting a
+  backup requires the admin password, and "Restore selected backup" runs
+  `zfs receive -F -d <target pool>` (admin password required).
+* **If the system cannot boot**: boot a FreeBSD live media, import the backup
+  pool and receive the full stream first, then the increments in order:
+  ```sh
+  zpool import backup
+  zfs receive -F -d <target> < full-<timestamp>.zfs
+  zfs receive -F -d <target> < inc-<timestamp>.zfs
+  ```
+
+### 5.8 Boot environments (FreeBSD)
 
 Lists `bectl list` (name, active state, mountpoint, used, creation time) and
 supports create, activate, rename, mount, unmount, export, import and destroy.
 
-### 5.8 Command center
+### 5.9 Command center
 
 Day-to-day work uses the object panels. For less common functions, open
 **Command center** in the sidebar: search the 87 controlled operations by
 category or keyword, double-click an entry to open its form; every parameter has
 type hints and live validation, and the final command is previewed in real time.
 
-### 5.9 Help page
+### 5.10 Help page
 
 The **Help** page in the sidebar documents every page in detail: connection and
 permissions, pools, datasets, snapshots, send/receive, boot environments, system,
@@ -387,7 +474,7 @@ command center, authorization, shortcuts and FAQ. It also auto-generates the
 category). The search box filters topics; `Alt+8` jumps to the page. Text size
 can be zoomed with `Ctrl+=` / `Ctrl+-` / `Ctrl+0`.
 
-### 5.10 System
+### 5.11 System
 
 ZFS userland/kernel versions, JSON capability, socket path, ARC hit rate and all
 kstat statistics, plus the task log of every command issued by the UI.
@@ -529,3 +616,8 @@ notice, license text and disclaimer. See [LICENSE](LICENSE) and
 
 > The software is provided "as is", without warranty. Be careful with destroy,
 > rollback and format operations, and always keep backups.
+
+## Further reading
+
+- [Capsicum feasibility and the bectl exception](docs/CAPSICUM.md)
+- [Read-only separation progress](docs/READ-ONLY-SEPARATION.md)

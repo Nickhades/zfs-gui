@@ -12,6 +12,7 @@
 #include "zg-app.h"
 #include "zg-client.h"
 #include "zg-dialogs.h"
+#include "zg-libzfs.h"
 #include "zg-model.h"
 #include "zg-pages.h"
 #include "zg-table.h"
@@ -118,11 +119,67 @@ compare_datasets(gconstpointer a,
 
     return g_strcmp0(left->name, right->name);
 }
+static const gchar *
+ds_row_fullname(ZgRow *row)
+{
+    DsTag *tag = zg_row_get_tag(row);
+
+    return tag != NULL ? tag->fullname : NULL;
+}
+
+static gboolean
+datasets_has_name(DatasetsPage *page,
+                  const gchar *name)
+{
+    guint i;
+
+    for (i = 0; page->datasets != NULL && i < page->datasets->len; i++)
+    {
+        ZgDataset *dataset = g_ptr_array_index(page->datasets, i);
+
+        if (g_strcmp0(dataset->name, name) == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static void
+datasets_reveal(DatasetsPage *page,
+                const gchar *fullname)
+{
+    gchar **parts = g_strsplit(fullname, "/", -1);
+    GPtrArray *prefixes = g_ptr_array_new_with_free_func(g_free);
+    GString *acc = g_string_new(NULL);
+    guint i;
+
+    for (i = 0; parts[i] != NULL; i++)
+    {
+        if (parts[i][0] == '\0')
+            continue;
+
+        if (acc->len > 0)
+            g_string_append_c(acc, '/');
+        g_string_append(acc, parts[i]);
+        g_ptr_array_add(prefixes, g_strdup(acc->str));
+    }
+
+    zg_table_reveal_path(page->table, (const gchar *const *)prefixes->pdata,
+                         prefixes->len, ds_row_fullname);
+
+    g_string_free(acc, TRUE);
+    g_strfreev(parts);
+    g_ptr_array_free(prefixes, TRUE);
+}
+
 static void
 datasets_rebuild(DatasetsPage *page)
 {
     GHashTable *row_table;
+    gchar *keep;
     guint i;
+
+    keep = g_strdup(page->selected != NULL ? page->selected : page->sel_name);
 
     g_list_store_remove_all(page->store);
 
@@ -213,7 +270,40 @@ datasets_rebuild(DatasetsPage *page)
 
     g_hash_table_destroy(row_table);
 
-    zg_table_select_first(page->table);
+    if (keep != NULL)
+    {
+        gchar *candidate = g_strdup(keep);
+
+        while (candidate != NULL && !datasets_has_name(page, candidate))
+        {
+            gchar *slash = strrchr(candidate, '/');
+
+            if (slash == NULL)
+            {
+                g_free(candidate);
+                candidate = NULL;
+                break;
+            }
+
+            *slash = '\0';
+        }
+
+        if (candidate != NULL)
+        {
+            datasets_reveal(page, candidate);
+            g_free(candidate);
+        }
+        else
+        {
+            zg_table_select_first(page->table);
+        }
+    }
+    else
+    {
+        zg_table_select_first(page->table);
+    }
+
+    g_free(keep);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -246,6 +336,28 @@ ds_is_current(DsContext *context)
 }
 
 static void
+datasets_show_properties(DatasetsPage *page,
+                         GPtrArray *properties)
+{
+    guint i;
+
+    g_list_store_remove_all(page->props_store);
+
+    for (i = 0; i < properties->len; i++)
+    {
+        ZgProperty *property = g_ptr_array_index(properties, i);
+        ZgRow *row = zg_row_new();
+
+        zg_row_set_text(row, DPROP_COL_NAME, property->property);
+        zg_row_set_text(row, DPROP_COL_VALUE, property->value);
+        zg_row_set_text(row, DPROP_COL_SOURCE, property->source);
+
+        g_list_store_append(page->props_store, row);
+        g_object_unref(row);
+    }
+}
+
+static void
 on_ds_props(GObject *source,
             GAsyncResult *result,
             gpointer user_data)
@@ -253,30 +365,15 @@ on_ds_props(GObject *source,
     DsContext *context = user_data;
     ZgClientResult *response = zg_client_call_finish(result);
     GPtrArray *properties;
-    guint i;
 
     (void)source;
 
     if (ds_is_current(context))
     {
-        g_list_store_remove_all(context->page->props_store);
-
         properties = zg_model_properties_from_tsv(
                 (response != NULL && response->ok) ? response->stdout_text : "");
 
-        for (i = 0; i < properties->len; i++)
-        {
-            ZgProperty *property = g_ptr_array_index(properties, i);
-            ZgRow *row = zg_row_new();
-
-            zg_row_set_text(row, DPROP_COL_NAME, property->property);
-            zg_row_set_text(row, DPROP_COL_VALUE, property->value);
-            zg_row_set_text(row, DPROP_COL_SOURCE, property->source);
-
-            g_list_store_append(context->page->props_store, row);
-            g_object_unref(row);
-        }
-
+        datasets_show_properties(context->page, properties);
         g_ptr_array_free(properties, TRUE);
     }
 
@@ -346,6 +443,22 @@ datasets_load_detail(DatasetsPage *page,
     if (dataset == NULL)
         return;
 
+#ifdef HAVE_LIBZFS
+    if (zg_libzfs_available())
+    {
+        GPtrArray *local = zg_libzfs_dataset_props(dataset);
+
+        if (local != NULL)
+        {
+            if (g_strcmp0(page->selected, dataset) == 0)
+                datasets_show_properties(page, local);
+
+            g_ptr_array_free(local, TRUE);
+            goto dataset_space;
+        }
+    }
+#endif
+
     args = zg_args_new();
     zg_args_add_flag(args, "-H");
     zg_args_add_flag(args, "-p");
@@ -356,6 +469,8 @@ datasets_load_detail(DatasetsPage *page,
     context->page = page;
     context->dataset = g_strdup(dataset);
     zg_client_call_async("zfs.get", zg_args_to_json(args), on_ds_props, context);
+
+dataset_space:
 
     args = zg_args_new();
     zg_args_add_flag(args, "-H");
@@ -461,6 +576,27 @@ datasets_refresh(gpointer data)
     if (!zg_app_is_connected(page->app))
         return;
 
+#ifdef HAVE_LIBZFS
+    /* 阶段 A：优先用 libzfs 只读读取；不可用/失败时回退守护进程 */
+    if (zg_libzfs_available())
+    {
+        GPtrArray *local = zg_libzfs_datasets();
+
+        if (local != NULL)
+        {
+            if (page->datasets != NULL)
+                g_ptr_array_free(page->datasets, TRUE);
+
+            page->datasets = local;
+            datasets_rebuild(page);
+
+            zg_app_set_status(page->app, "数据集列表已更新（%u 项，libzfs）",
+                              page->datasets->len);
+            return;
+        }
+    }
+#endif
+
     args = zg_args_new();
     zg_args_add_flag(args, "-H");
     zg_args_add_flag(args, "-p");
@@ -499,8 +635,15 @@ on_rename_dataset(GtkButton *button,
         return;
     }
 
-    zg_dialogs_generic_op(page_window(page), "zfs.rename", name, NULL, NULL);
+    if (strchr(name, '/') == NULL)
+    {
+        zg_dialogs_error(page_window(page), "不能重命名存储池",
+                         "池根数据集不能重命名；请对池内的数据集或快照操作。");
+        g_free(name);
+        return;
+    }
 
+    zg_dialogs_rename(page_window(page), name, on_action_done, page);
     g_free(name);
 }
 
@@ -770,8 +913,13 @@ on_ds_destroy(GtkButton *button,
     (void)button;
 
     if (page->sel_name != NULL)
-        zg_dialogs_destroy_target(page_window(page), page->sel_name, FALSE,
-                                  on_action_done, page);
+    {
+        /* 池根数据集没有 '/'：必须用 zpool destroy，不能 zfs destroy */
+        gboolean is_pool_root = strchr(page->sel_name, '/') == NULL;
+
+        zg_dialogs_destroy_target(page_window(page), page->sel_name,
+                                  is_pool_root, on_action_done, page);
+    }
 }
 
 static void
@@ -813,12 +961,12 @@ datasets_update_panel(DatasetsPage *page)
     if (page->sel_name == NULL)
     {
         ZgAction actions[] = {
-                {"刷新", "view-refresh-symbolic", "重新读取列表（F5）",
+                {"刷新", "zg-refresh-symbolic", "重新读取列表（F5）",
                  FALSE, TRUE, FALSE, G_CALLBACK(on_ds_refresh), page},
         };
 
         zg_action_panel_set(page->panel,
-                            &(ZgPanelSpec){.icon = "folder-symbolic",
+                            &(ZgPanelSpec){.icon = "zg-dataset-symbolic",
                                            .title = "数据集",
                                            .subtitle = "选择一个数据集开始操作",
                                            .state = NULL,
@@ -833,44 +981,44 @@ datasets_update_panel(DatasetsPage *page)
         guint n = 0;
 
         actions[n++] = (ZgAction){
-                "属性", "document-properties-symbolic", "查看与修改属性（Enter）",
+                "属性", "zg-properties-symbolic", "查看与修改属性（Enter）",
                 FALSE, TRUE, FALSE, G_CALLBACK(on_ds_show_props), page};
         actions[n++] = (ZgAction){
-                "创建快照", "camera-photo-symbolic", "为这个数据集创建快照",
+                "创建快照", "zg-snapshot-symbolic", "为这个数据集创建快照",
                 FALSE, FALSE, FALSE, G_CALLBACK(on_ds_snapshot), page};
 
         if (page->sel_mounted)
             actions[n++] = (ZgAction){
-                    "卸载", "media-playback-stop-symbolic", "卸载数据集",
+                    "卸载", "zg-stop-symbolic", "卸载数据集",
                     FALSE, FALSE, FALSE, G_CALLBACK(on_unmount_dataset), page};
         else
             actions[n++] = (ZgAction){
-                    "挂载", "media-playback-start-symbolic", "挂载数据集",
+                    "挂载", "zg-run-symbolic", "挂载数据集",
                     FALSE, FALSE, FALSE, G_CALLBACK(on_mount_dataset), page};
 
         actions[n++] = (ZgAction){
-                "重命名", "document-edit-symbolic", "重命名数据集（F2）",
+                "重命名", "zg-edit-symbolic", "重命名数据集（F2）",
                 FALSE, FALSE, FALSE, G_CALLBACK(on_rename_dataset), page};
         actions[n++] = (ZgAction){
-                "配额", "drive-harddisk-symbolic", "设置用户 / 组配额",
+                "配额", "zg-pool-symbolic", "设置用户 / 组配额",
                 FALSE, FALSE, FALSE, G_CALLBACK(on_ds_quota), page};
         actions[n++] = (ZgAction){
-                "加密", "channel-secure-symbolic", "加载 / 卸载 / 更换密钥",
+                "加密", "zg-secure-symbolic", "加载 / 卸载 / 更换密钥",
                 FALSE, FALSE, FALSE, G_CALLBACK(on_ds_encrypt), page};
         actions[n++] = (ZgAction){
-                "委派", "system-users-symbolic", "把权限委派给普通用户",
+                "委派", "zg-users-symbolic", "把权限委派给普通用户",
                 FALSE, FALSE, FALSE, G_CALLBACK(on_ds_delegate), page};
         actions[n++] = (ZgAction){
-                "共享", "network-transmit-receive-symbolic", "通过 NFS / SMB 共享",
+                "共享", "zg-sendrecv-symbolic", "通过 NFS / SMB 共享",
                 FALSE, FALSE, FALSE, G_CALLBACK(on_ds_share), page};
         actions[n++] = (ZgAction){
-                "销毁", "edit-delete-symbolic", "永久删除数据集（Delete）",
+                "销毁", "zg-trash-symbolic", "永久删除数据集（Delete）",
                 TRUE, FALSE, TRUE, G_CALLBACK(on_ds_destroy), page};
 
         zg_action_panel_set(page->panel,
                             &(ZgPanelSpec){.icon = g_strcmp0(page->sel_type, "volume") == 0
-                                                           ? "drive-harddisk-symbolic"
-                                                           : "folder-symbolic",
+                                                           ? "zg-pool-symbolic"
+                                                           : "zg-dataset-symbolic",
                                            .title = page->sel_name,
                                            .subtitle = g_strcmp0(page->sel_type, "volume") == 0
                                                                ? "卷 (zvol)"
@@ -1024,6 +1172,39 @@ datasets_live_refresh(gpointer data)
     if (!zg_app_is_connected(page->app))
         return;
 
+#ifdef HAVE_LIBZFS
+    if (zg_libzfs_available())
+    {
+        GPtrArray *local = zg_libzfs_datasets();
+
+        if (local != NULL)
+        {
+            GListModel *model;
+            guint i;
+            guint n;
+
+            if (page->datasets != NULL)
+                g_ptr_array_free(page->datasets, TRUE);
+
+            page->datasets = local;
+
+            model = G_LIST_MODEL(page->store);
+            n = g_list_model_get_n_items(model);
+
+            for (i = 0; i < n; i++)
+            {
+                ZgRow *row = ZG_ROW(g_list_model_get_item(model, i));
+
+                datasets_live_row(row, page->datasets);
+                g_object_unref(row);
+            }
+
+            datasets_apply_usage(page);
+            return;
+        }
+    }
+#endif
+
     args = zg_args_new();
     zg_args_add_flag(args, "-H");
     zg_args_add_flag(args, "-p");
@@ -1080,7 +1261,7 @@ zg_page_datasets_new(ZgApp *app)
         };
 
         page->table = zg_table_new_tree(page->store, columns,
-                                        G_N_ELEMENTS(columns));
+                                        G_N_ELEMENTS(columns), FALSE);
     }
 
     scrolled = gtk_scrolled_window_new();

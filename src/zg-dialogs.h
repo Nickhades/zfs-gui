@@ -38,6 +38,23 @@ void zg_dialogs_show_output(GtkWindow *parent,
 
 /* 执行注册表中的操作；args 的所有权被接管。
  * success_message 为 NULL 时，只读操作的输出会直接以窗口展示。 */
+/* 带实时进度的长任务（发送到文件等） */
+typedef struct
+{
+    const gchar *op_id;
+    const gchar *title;
+    const gchar *subject;
+    const gchar *target;
+    const gchar *success_message;
+    gboolean dryrun;
+    ZgDialogDoneFunc done;
+    gpointer data;
+} ZgProgressSpec;
+
+void zg_dialogs_run_progress(GtkWindow *parent,
+                             const ZgProgressSpec *spec,
+                             ZgArgs *args);
+
 void zg_dialogs_run_op(GtkWindow *parent,
                        const gchar *op_id,
                        ZgArgs *args,
@@ -70,6 +87,11 @@ void zg_dialogs_create_snapshot(GtkWindow *parent,
                                 const gchar *preset_dataset,
                                 ZgDialogDoneFunc done,
                                 gpointer data);
+void zg_dialogs_rename(GtkWindow *parent,
+                       const gchar *target,
+                       ZgDialogDoneFunc done,
+                       gpointer data);
+
 void zg_dialogs_destroy_target(GtkWindow *parent,
                                const gchar *target,
                                gboolean is_pool,
@@ -142,6 +164,7 @@ typedef void (*ZgInputFunc)(const gchar *text, gpointer data);
 void zg_dialogs_pick_save(GtkWindow *parent, GtkWidget *entry,
                           const gchar *suggested_name);
 void zg_dialogs_pick_open(GtkWindow *parent, GtkWidget *entry);
+void zg_dialogs_pick_folder(GtkWindow *parent, GtkWidget *entry);
 
 /* 单字段输入对话框的参数 */
 typedef struct

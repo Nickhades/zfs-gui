@@ -417,12 +417,12 @@ be_update_panel(BePage *page)
     if (page->selected == NULL)
     {
         ZgAction actions[] = {
-                {"刷新", "view-refresh-symbolic", "重新读取启动环境列表（F5）",
+                {"刷新", "zg-refresh-symbolic", "重新读取启动环境列表（F5）",
                  FALSE, TRUE, FALSE, G_CALLBACK(on_be_refresh), page},
         };
 
         zg_action_panel_set(page->panel,
-                            &(ZgPanelSpec){.icon = "applications-system-symbolic",
+                            &(ZgPanelSpec){.icon = "zg-system-symbolic",
                                            .title = "启动环境",
                                            .subtitle = "选择一个启动环境开始操作",
                                            .state = NULL,
@@ -434,22 +434,22 @@ be_update_panel(BePage *page)
 
     {
         ZgAction actions[] = {
-                {"激活", "emblem-ok-symbolic", "设为下次启动目标（Enter）",
+                {"激活", "zg-ok-symbolic", "设为下次启动目标（Enter）",
                  FALSE, TRUE, FALSE, G_CALLBACK(on_be_activate_clicked), page},
-                {"挂载", "media-playback-start-symbolic", "挂载以便修改",
+                {"挂载", "zg-run-symbolic", "挂载以便修改",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_be_mount_clicked), page},
-                {"卸载", "media-playback-stop-symbolic", "卸载启动环境",
+                {"卸载", "zg-stop-symbolic", "卸载启动环境",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_be_unmount_clicked), page},
-                {"重命名", "document-edit-symbolic", "重命名启动环境",
+                {"重命名", "zg-edit-symbolic", "重命名启动环境",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_be_rename), page},
-                {"导出", "document-save-symbolic", "导出为归档",
+                {"导出", "zg-backup-symbolic", "导出为归档",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_be_export_clicked), page},
-                {"销毁", "edit-delete-symbolic", "删除该启动环境（Delete）",
+                {"销毁", "zg-trash-symbolic", "删除该启动环境（Delete）",
                  TRUE, FALSE, TRUE, G_CALLBACK(on_be_destroy_clicked), page},
         };
 
         zg_action_panel_set(page->panel,
-                            &(ZgPanelSpec){.icon = "applications-system-symbolic",
+                            &(ZgPanelSpec){.icon = "zg-system-symbolic",
                                            .title = page->selected,
                                            .subtitle = "ZFS 启动环境（bectl）",
                                            .state = NULL,

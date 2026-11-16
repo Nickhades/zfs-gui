@@ -65,6 +65,7 @@ zg_policy_load(const gchar *path,
     policy->socket_mode = ZG_SOCKET_MODE_DEFAULT;
     policy->io_timeout = ZG_IO_TIMEOUT_SECONDS;
     policy->auth_mode = g_strdup("dangerous");
+    policy->strict_mode = FALSE;
     policy->auth_max_attempts = 3;
     policy->auth_lockout = 300;
 
@@ -134,6 +135,25 @@ zg_policy_load(const gchar *path,
 
             if (g_ascii_string_to_unsigned(value, 10, 0, G_MAXUINT, &timeout, NULL))
                 policy->io_timeout = (guint)timeout;
+        }
+        else if (g_strcmp0(key, "strict_mode") == 0)
+        {
+            if (g_ascii_strcasecmp(value, "on") == 0 ||
+                g_ascii_strcasecmp(value, "yes") == 0 ||
+                g_ascii_strcasecmp(value, "true") == 0 ||
+                g_strcmp0(value, "1") == 0)
+                policy->strict_mode = TRUE;
+            else if (g_ascii_strcasecmp(value, "off") == 0 ||
+                     g_ascii_strcasecmp(value, "no") == 0 ||
+                     g_ascii_strcasecmp(value, "false") == 0 ||
+                     g_strcmp0(value, "0") == 0)
+                policy->strict_mode = FALSE;
+            else
+            {
+                g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_INVAL,
+                            "strict_mode 取值非法：%s（应为 on/off）", value);
+                return NULL;
+            }
         }
         else if (g_strcmp0(key, "auth_mode") == 0)
         {
@@ -218,6 +238,12 @@ gid_t zg_policy_socket_gid(const ZgPolicy *policy)
         return (gid_t)-1;
 
     return group->gr_gid;
+}
+
+gboolean
+zg_policy_strict_mode(const ZgPolicy *policy)
+{
+    return policy != NULL && policy->strict_mode;
 }
 
 const gchar *

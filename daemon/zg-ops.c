@@ -15,11 +15,13 @@
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <time.h>
+#include <errno.h>
 #include <unistd.h>
 
 #include "zg-auth.h"
 #include "zg-exec.h"
 #include "zg-json.h"
+#include "zg-libzfs-exec.h"
 #include "zg-log.h"
 #include "zg-protocol.h"
 #include "zg-util.h"
@@ -417,6 +419,36 @@ run_tool(const ZgOpDef *op,
     return outcome;
 }
 
+static ZgOpOutcome *
+backup_unlink(const ZgOpRequest *request)
+{
+    ZgOpOutcome *outcome = g_new0(ZgOpOutcome, 1);
+    const gchar *path = NULL;
+
+    if (request->positional->len > 0)
+        path = g_ptr_array_index(request->positional, 0);
+
+    if (path == NULL || path[0] != '/' ||
+        !g_str_has_suffix(path, ".zfs") ||
+        strstr(path, "..") != NULL)
+    {
+        outcome->ok = FALSE;
+        outcome->message = g_strdup("拒绝删除：只允许删除 .zfs 备份文件");
+        return outcome;
+    }
+
+    if (unlink(path) != 0)
+    {
+        outcome->ok = FALSE;
+        outcome->message = g_strdup_printf("删除失败：%s", g_strerror(errno));
+        return outcome;
+    }
+
+    outcome->ok = TRUE;
+    outcome->message = g_strdup("备份文件已删除");
+    return outcome;
+}
+
 ZgOpOutcome *
 zg_op_execute(const ZgOpDef *op,
               const ZgOpRequest *request,
@@ -429,12 +461,31 @@ zg_op_execute(const ZgOpDef *op,
 
     started = now_ms();
 
-    if (g_strcmp0(op->id, "system.info") == 0)
+    if (g_strcmp0(op->id, "backup.unlink") == 0)
+        outcome = backup_unlink(request);
+    else if (g_strcmp0(op->id, "system.info") == 0)
         outcome = system_info(policy);
     else if (g_strcmp0(op->id, "system.arcstats") == 0)
         outcome = system_arcstats();
     else
-        outcome = run_tool(op, request, policy);
+    {
+        if (!zg_libzfs_exec_try(op, request, &outcome))
+        {
+            if (zg_policy_strict_mode(policy))
+            {
+                outcome = outcome_new();
+                set_failure(outcome, 1,
+                            "严格模式：该操作尚未迁移到 libzfs，已拒绝执行");
+                outcome->stdout_text = g_strdup("");
+                outcome->stderr_text = g_strdup("");
+                outcome->data_json = g_strdup("");
+            }
+            else
+            {
+                outcome = run_tool(op, request, policy);
+            }
+        }
+    }
 
     if (outcome != NULL)
         outcome->duration_ms = now_ms() - started;

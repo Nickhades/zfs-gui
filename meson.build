@@ -9,6 +9,8 @@ project('zfs-gui', 'c',
   ],
 )
 
+gnome = import('gnome')
+
 cc = meson.get_compiler('c')
 
 # ---------------------------------------------------------------------------
@@ -17,6 +19,18 @@ cc = meson.get_compiler('c')
 glib_dep = dependency('glib-2.0', version: '>= 2.66')
 gio_dep  = dependency('gio-2.0',  version: '>= 2.66')
 gtk_dep  = dependency('gtk4',     version: '>= 4.6', required: get_option('gui'))
+
+# 可选的 libzfs 只读适配层（pkg-config: sysutils/openzfs 或 libzfs 开发包）
+libzfs_dep = declare_dependency()
+use_libzfs = false
+if get_option('libzfs') != 'disabled'
+  libzfs_full = dependency('libzfs', required: get_option('libzfs') == 'enabled')
+  if libzfs_full.found()
+    # 只需要头文件/宏：运行时通过 dlopen 加载，不产生硬链接依赖
+    libzfs_dep = libzfs_full.partial_dependency(compile_args: true, includes: true)
+    use_libzfs = true
+  endif
+endif
 pam_dep  = cc.find_library('pam', required: true)
 
 # ---------------------------------------------------------------------------
@@ -75,8 +89,10 @@ executable('zfs-guid',
     'daemon/zg-ops.c',
     'daemon/zg-log.c',
     'daemon/zg-auth.c',
+    'daemon/zg-libzfs-exec.c',
   ),
-  dependencies: [zgcommon_dep, pam_dep],
+  dependencies: [zgcommon_dep, pam_dep, libzfs_dep],
+  c_args: use_libzfs ? ['-DHAVE_LIBZFS', '-Wno-gnu-include-next', '-Wno-variadic-macros'] : [],
   install: true,
   install_dir: get_option('sbindir'),
 )
@@ -100,15 +116,21 @@ if gtk_dep.found()
       'src/zg-page-be.c',
       'src/zg-page-system.c',
       'src/zg-page-ops.c',
+      'src/zg-page-backup.c',
       'src/zg-page-help.c',
       'src/zg-dialogs.c',
       'src/zg-dialogs-objects.c',
       'src/zg-dialogs-import.c',
       'src/zg-dialogs-secure.c',
       'src/zg-actions.c',
+      'src/zg-libzfs.c',
   'src/zg-table.c',
-    ),
-    dependencies: [zgcommon_dep, gtk_dep, gio_dep],
+    ) + gnome.compile_resources('zfs-gui-icons',
+        'data/icons/icons.gresource.xml',
+        source_dir: 'data/icons',
+        c_name: 'zg_icons'),
+    dependencies: [zgcommon_dep, gtk_dep, gio_dep, libzfs_dep],
+    c_args: use_libzfs ? ['-DHAVE_LIBZFS', '-Wno-gnu-include-next', '-Wno-variadic-macros'] : [],
     install: true,
   )
 

@@ -510,7 +510,7 @@ build_send_group(SendRecvPage *page)
     gtk_widget_set_hexpand(page->send_snapshot, TRUE);
     {
         GtkWidget *snapshot_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-        GtkWidget *refresh = gtk_button_new_from_icon_name("view-refresh-symbolic");
+        GtkWidget *refresh = gtk_button_new_from_icon_name("zg-refresh-symbolic");
 
         gtk_widget_set_tooltip_text(refresh, "重新读取系统快照列表");
         g_signal_connect(refresh, "clicked", G_CALLBACK(on_refresh_snapshots), page);
@@ -524,7 +524,7 @@ build_send_group(SendRecvPage *page)
 
     {
         GtkWidget *output_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-        GtkWidget *pick = gtk_button_new_from_icon_name("folder-open-symbolic");
+        GtkWidget *pick = gtk_button_new_from_icon_name("zg-folder-open-symbolic");
 
         page->send_output = gtk_entry_new();
         gtk_widget_set_hexpand(page->send_output, TRUE);
@@ -583,7 +583,7 @@ build_receive_group(SendRecvPage *page)
 
     {
         GtkWidget *input_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-        GtkWidget *pick = gtk_button_new_from_icon_name("document-open-symbolic");
+        GtkWidget *pick = gtk_button_new_from_icon_name("zg-open-symbolic");
 
         page->recv_input = gtk_entry_new();
         gtk_widget_set_hexpand(page->recv_input, TRUE);

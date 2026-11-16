@@ -31,14 +31,15 @@ static gboolean on_shortcut_help_zoom(GtkWidget *widget,
                                       gpointer user_data);
 
 static const NavItem nav_items[] = {
-        {"drive-harddisk-symbolic", "存储池", "容量、健康与 vdev 拓扑"},
-        {"folder-symbolic", "数据集", "文件系统、卷与属性"},
-        {"camera-photo-symbolic", "快照", "回滚、克隆与发送"},
-        {"document-send-symbolic", "发送/接收", "快照流传输与恢复"},
-        {"applications-system-symbolic", "启动环境", "bectl 启动环境管理"},
-        {"preferences-system-symbolic", "系统", "版本、ARC 与任务日志"},
-        {"utilities-terminal-symbolic", "命令中心", "全部受控操作"},
-        {"help-browser-symbolic", "操作帮助", "每个功能的详细说明"},
+        {"zg-pool-symbolic", "存储池", "容量、健康与 vdev 拓扑"},
+        {"zg-dataset-symbolic", "数据集", "文件系统、卷与属性"},
+        {"zg-snapshot-symbolic", "快照", "回滚、克隆与发送"},
+        {"zg-send-symbolic", "发送/接收", "快照流传输与恢复"},
+        {"zg-backup-symbolic", "系统备份", "全量 / 增量备份到外置盘"},
+        {"zg-system-symbolic", "启动环境", "bectl 启动环境管理"},
+        {"zg-settings-symbolic", "系统", "版本、ARC 与任务日志"},
+        {"zg-command-symbolic", "命令中心", "全部受控操作"},
+        {"zg-help-symbolic", "操作帮助", "每个功能的详细说明"},
 };
 
 typedef struct
@@ -115,8 +116,8 @@ on_maximized_changed(GObject *object,
 
     gtk_image_set_from_icon_name(GTK_IMAGE(image),
                                  gtk_window_is_maximized(GTK_WINDOW(object))
-                                         ? "window-restore-symbolic"
-                                         : "window-maximize-symbolic");
+                                         ? "zg-restore-symbolic"
+                                         : "zg-maximize-symbolic");
 }
 
 static void
@@ -293,7 +294,7 @@ build_sidebar(WindowContext *context,
     gtk_widget_set_margin_start(brand, 16);
     gtk_widget_set_margin_end(brand, 16);
 
-    brand_icon = gtk_image_new_from_icon_name("drive-harddisk-symbolic");
+    brand_icon = gtk_image_new_from_icon_name("zg-pool-symbolic");
     gtk_image_set_pixel_size(GTK_IMAGE(brand_icon), 26);
     gtk_widget_add_css_class(brand_icon, "zg-brand-tile");
 
@@ -330,6 +331,8 @@ build_sidebar(WindowContext *context,
         GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
         GtkWidget *icon = gtk_image_new_from_icon_name(nav_items[i].icon);
         GtkWidget *texts = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+
+        gtk_image_set_pixel_size(GTK_IMAGE(icon), 22);
         GtkWidget *title = gtk_label_new(nav_items[i].title);
         GtkWidget *subtitle = gtk_label_new(nav_items[i].subtitle);
 
@@ -376,7 +379,7 @@ build_sidebar(WindowContext *context,
     gtk_widget_add_css_class(context->secure_box, "zg-secure-badge");
 
     secure_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    secure_icon = gtk_image_new_from_icon_name("channel-secure-symbolic");
+    secure_icon = gtk_image_new_from_icon_name("zg-secure-symbolic");
     gtk_image_set_pixel_size(GTK_IMAGE(secure_icon), 16);
     gtk_widget_add_css_class(secure_icon, "zg-lock-icon");
 
@@ -508,7 +511,7 @@ build_menu_button(ZgApp *app)
     gtk_widget_set_margin_start(box, 6);
     gtk_widget_set_margin_end(box, 6);
 
-    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(button), "open-menu-symbolic");
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(button), "zg-menu-symbolic");
     gtk_widget_set_tooltip_text(button, "菜单");
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(button), popover);
 
@@ -593,9 +596,9 @@ zg_window_new(ZgApp *app)
 
     {
         GtkWidget *controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
-        GtkWidget *minimize = gtk_button_new_from_icon_name("window-minimize-symbolic");
-        GtkWidget *maximize = gtk_button_new_from_icon_name("window-maximize-symbolic");
-        GtkWidget *close_button = gtk_button_new_from_icon_name("window-close-symbolic");
+        GtkWidget *minimize = gtk_button_new_from_icon_name("zg-minimize-symbolic");
+        GtkWidget *maximize = gtk_button_new_from_icon_name("zg-maximize-symbolic");
+        GtkWidget *close_button = gtk_button_new_from_icon_name("zg-close-symbolic");
 
         gtk_widget_add_css_class(minimize, "flat");
         gtk_widget_add_css_class(minimize, "zg-window-control");
@@ -624,7 +627,7 @@ zg_window_new(ZgApp *app)
         gtk_header_bar_pack_end(GTK_HEADER_BAR(header), controls);
     }
 
-    refresh_button = gtk_button_new_from_icon_name("view-refresh-symbolic");
+    refresh_button = gtk_button_new_from_icon_name("zg-refresh-symbolic");
     gtk_widget_set_tooltip_text(refresh_button, "刷新全部页面 (Ctrl+R)");
     gtk_widget_add_css_class(refresh_button, "suggested-action");
     g_signal_connect(refresh_button, "clicked", G_CALLBACK(on_refresh_clicked), app);
@@ -662,6 +665,7 @@ zg_window_new(ZgApp *app)
                 zg_page_datasets_new(app),
                 zg_page_snapshots_new(app),
                 zg_page_sendrecv_new(app),
+                zg_page_backup_new(app),
                 zg_page_be_new(app),
                 zg_page_system_new(app),
                 zg_page_ops_new(app),

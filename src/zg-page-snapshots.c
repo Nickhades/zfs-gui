@@ -11,6 +11,7 @@
 #include "zg-app.h"
 #include "zg-client.h"
 #include "zg-dialogs.h"
+#include "zg-libzfs.h"
 #include "zg-model.h"
 #include "zg-pages.h"
 #include "zg-table.h"
@@ -161,6 +162,25 @@ snapshots_refresh(gpointer data)
 
     if (!zg_app_is_connected(page->app))
         return;
+
+#ifdef HAVE_LIBZFS
+    if (zg_libzfs_available())
+    {
+        GPtrArray *local = zg_libzfs_snapshots();
+
+        if (local != NULL)
+        {
+            if (page->snapshots != NULL)
+                g_ptr_array_free(page->snapshots, TRUE);
+
+            page->snapshots = local;
+            snapshots_rebuild(page);
+            zg_app_set_status(page->app, "快照列表已更新（%u 个，libzfs）",
+                              page->snapshots->len);
+            return;
+        }
+    }
+#endif
 
     args = zg_args_new();
     zg_args_add_flag(args, "-H");
@@ -630,12 +650,12 @@ snapshots_update_panel(SnapshotsPage *page)
     if (page->sel_snapshot == NULL)
     {
         ZgAction actions[] = {
-                {"刷新", "view-refresh-symbolic", "重新读取列表（F5）",
+                {"刷新", "zg-refresh-symbolic", "重新读取列表（F5）",
                  FALSE, TRUE, FALSE, G_CALLBACK(on_snap_refresh), page},
         };
 
         zg_action_panel_set(page->panel,
-                            &(ZgPanelSpec){.icon = "camera-photo-symbolic",
+                            &(ZgPanelSpec){.icon = "zg-snapshot-symbolic",
                                            .title = "快照",
                                            .subtitle = "选择一个快照开始操作",
                                            .state = NULL,
@@ -647,26 +667,26 @@ snapshots_update_panel(SnapshotsPage *page)
 
     {
         ZgAction actions[] = {
-                {"发送", "document-send-symbolic", "导出为快照流文件（Enter）",
+                {"发送", "zg-send-symbolic", "导出为快照流文件（Enter）",
                  FALSE, TRUE, FALSE, G_CALLBACK(on_snap_send), page},
-                {"回滚", "edit-undo-symbolic", "把数据集恢复到该快照",
+                {"回滚", "zg-undo-symbolic", "把数据集恢复到该快照",
                  TRUE, FALSE, TRUE, G_CALLBACK(on_snap_rollback), page},
-                {"克隆", "edit-copy-symbolic", "克隆为新的可写数据集",
+                {"克隆", "zg-copy-symbolic", "克隆为新的可写数据集",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_snap_clone), page},
-                {"差异", "edit-find-symbolic", "比较文件差异",
+                {"差异", "zg-search-symbolic", "比较文件差异",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_snap_diff), page},
-                {"hold", "bookmark-new-symbolic", "防止快照被误删",
+                {"hold", "zg-bookmark-symbolic", "防止快照被误删",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_snap_hold), page},
-                {"release", "user-trash-symbolic", "释放 hold 标签",
+                {"release", "zg-trash-symbolic", "释放 hold 标签",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_snap_release), page},
-                {"书签", "bookmark-new-symbolic", "创建不占空间的增量基点",
+                {"书签", "zg-bookmark-symbolic", "创建不占空间的增量基点",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_snap_bookmark), page},
-                {"销毁", "edit-delete-symbolic", "永久删除该快照（Delete）",
+                {"销毁", "zg-trash-symbolic", "永久删除该快照（Delete）",
                  TRUE, FALSE, TRUE, G_CALLBACK(on_snap_destroy), page},
         };
 
         zg_action_panel_set(page->panel,
-                            &(ZgPanelSpec){.icon = "camera-photo-symbolic",
+                            &(ZgPanelSpec){.icon = "zg-snapshot-symbolic",
                                            .title = page->selected,
                                            .subtitle = page->sel_dataset != NULL ? page->sel_dataset : "",
                                            .state = NULL,

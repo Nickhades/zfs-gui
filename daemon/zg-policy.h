@@ -30,6 +30,7 @@ typedef struct
     gchar *auth_mode;        /* dangerous / all / none */
     guint auth_max_attempts; /* 连续失败上限 */
     guint auth_lockout;      /* 锁定时长（秒） */
+    gboolean strict_mode;    /* 严格模式：禁止 exec 回退 */
 } ZgPolicy;
 
 /* 读取配置；文件不存在时使用安全默认值（root + wheel 组） */
@@ -50,6 +51,9 @@ const gchar *zg_policy_socket_path(const ZgPolicy *policy);
 
 /* 认证策略："dangerous"（默认）/ "all" / "none" */
 const gchar *zg_policy_auth_mode(const ZgPolicy *policy);
+
+/* 严格模式：未迁移到 libzfs 的操作直接拒绝，不回退命令行 */
+gboolean zg_policy_strict_mode(const ZgPolicy *policy);
 
 /* 该用户名是否属于管理员集合（root / allowed_users / allowed_groups） */
 gboolean zg_policy_user_is_admin(const ZgPolicy *policy,

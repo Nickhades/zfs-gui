@@ -14,6 +14,7 @@
 #include "zg-app.h"
 #include "zg-client.h"
 #include "zg-dialogs.h"
+#include "zg-libzfs.h"
 #include "zg-model.h"
 #include "zg-pages.h"
 #include "zg-table.h"
@@ -793,7 +794,7 @@ pools_update_panel(PoolsPage *page)
     if (page->sel_kind == POOL_SEL_NONE)
     {
         zg_action_panel_set(page->panel,
-                            &(ZgPanelSpec){.icon = "drive-harddisk-symbolic",
+                            &(ZgPanelSpec){.icon = "zg-pool-symbolic",
                                            .title = "存储池",
                                            .subtitle = "还没有选择对象",
                                            .state = NULL,
@@ -808,28 +809,28 @@ pools_update_panel(PoolsPage *page)
         ZgPool *pool = zg_model_pool_find(page->pools, page->sel_pool);
         gchar *subtitle = pool_sizes_text(page);
         ZgAction actions[] = {
-                {"属性", "document-properties-symbolic", "查看与修改池属性（Enter）",
+                {"属性", "zg-properties-symbolic", "查看与修改池属性（Enter）",
                  FALSE, TRUE, FALSE, G_CALLBACK(on_act_properties), page},
-                {"状态详情", "dialog-information-symbolic", "查看 vdev 与错误详情",
+                {"状态详情", "zg-info-symbolic", "查看 vdev 与错误详情",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_status), page},
-                {"添加磁盘", "list-add-symbolic", "把新磁盘加入这个池",
+                {"添加磁盘", "zg-add-symbolic", "把新磁盘加入这个池",
                  FALSE, FALSE, TRUE, G_CALLBACK(on_act_add_disk), page},
-                {"校验 scrub", "security-high-symbolic", "校验并修复池中数据",
+                {"校验 scrub", "zg-security-symbolic", "校验并修复池中数据",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_scrub), page},
-                {"TRIM", "user-trash-symbolic", "回收 SSD 空闲块",
+                {"TRIM", "zg-trash-symbolic", "回收 SSD 空闲块",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_trim), page},
-                {"清除错误", "edit-clear-symbolic", "清除错误计数",
+                {"清除错误", "zg-clear-symbolic", "清除错误计数",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_clear), page},
-                {"维护", "emblem-system-symbolic", "升级 / 初始化 / 检查点等",
+                {"维护", "zg-settings-symbolic", "升级 / 初始化 / 检查点等",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_maintenance), page},
-                {"导出", "document-save-symbolic", "从系统导出，便于迁移",
+                {"导出", "zg-backup-symbolic", "从系统导出，便于迁移",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_export), page},
-                {"销毁", "edit-delete-symbolic", "永久删除整个池",
+                {"销毁", "zg-trash-symbolic", "永久删除整个池",
                  TRUE, FALSE, TRUE, G_CALLBACK(on_act_destroy), page},
         };
 
         zg_action_panel_set(page->panel,
-                            &(ZgPanelSpec){.icon = "drive-harddisk-symbolic",
+                            &(ZgPanelSpec){.icon = "zg-pool-symbolic",
                                            .title = page->sel_pool,
                                            .subtitle = subtitle,
                                            .state = pool != NULL ? pool->health : NULL,
@@ -845,22 +846,22 @@ pools_update_panel(PoolsPage *page)
     {
         const gchar *device = selected_device(page);
         ZgAction actions[] = {
-                {"更换磁盘", "edit-copy-symbolic", "用新磁盘替换这块盘",
+                {"更换磁盘", "zg-copy-symbolic", "用新磁盘替换这块盘",
                  TRUE, TRUE, TRUE, G_CALLBACK(on_act_replace_disk), page},
-                {"离线", "media-playback-stop-symbolic", "安全拔盘前先离线",
+                {"离线", "zg-stop-symbolic", "安全拔盘前先离线",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_offline), page},
-                {"上线", "media-playback-start-symbolic", "把设备重新加入",
+                {"上线", "zg-run-symbolic", "把设备重新加入",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_online), page},
-                {"拆除", "edit-delete-symbolic", "从镜像中移除这块盘",
+                {"拆除", "zg-trash-symbolic", "从镜像中移除这块盘",
                  TRUE, FALSE, FALSE, G_CALLBACK(on_act_detach), page},
-                {"清除错误", "edit-clear-symbolic", "清除该设备的错误计数",
+                {"清除错误", "zg-clear-symbolic", "清除该设备的错误计数",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_clear_device), page},
-                {"状态详情", "dialog-information-symbolic", "查看池的详细状态",
+                {"状态详情", "zg-info-symbolic", "查看池的详细状态",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_status), page},
         };
 
         zg_action_panel_set(page->panel,
-                            &(ZgPanelSpec){.icon = "drive-harddisk-symbolic",
+                            &(ZgPanelSpec){.icon = "zg-pool-symbolic",
                                            .title = page->selected,
                                            .subtitle = device != NULL ? device : page->sel_pool,
                                            .state = NULL,
@@ -873,16 +874,16 @@ pools_update_panel(PoolsPage *page)
 
     {
         ZgAction actions[] = {
-                {"移除 vdev", "edit-delete-symbolic", "从池中移除这个 vdev",
+                {"移除 vdev", "zg-trash-symbolic", "从池中移除这个 vdev",
                  TRUE, TRUE, TRUE, G_CALLBACK(on_act_remove_vdev), page},
-                {"状态详情", "dialog-information-symbolic", "查看池的详细状态",
+                {"状态详情", "zg-info-symbolic", "查看池的详细状态",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_status), page},
-                {"属性", "document-properties-symbolic", "查看池属性",
+                {"属性", "zg-properties-symbolic", "查看池属性",
                  FALSE, FALSE, FALSE, G_CALLBACK(on_act_properties), page},
         };
 
         zg_action_panel_set(page->panel,
-                            &(ZgPanelSpec){.icon = "view-list-symbolic",
+                            &(ZgPanelSpec){.icon = "zg-list-symbolic",
                                            .title = page->selected,
                                            .subtitle = page->sel_pool,
                                            .state = NULL,
@@ -1487,11 +1488,46 @@ pools_refresh(gpointer data)
     if (!zg_app_is_connected(page->app))
         return;
 
+#ifdef HAVE_LIBZFS
+    if (zg_libzfs_available())
+    {
+        GPtrArray *local = zg_libzfs_pools();
+
+        if (local != NULL)
+        {
+            if (page->pools != NULL)
+                g_ptr_array_free(page->pools, TRUE);
+
+            page->pools = local;
+            pools_rebuild(page);
+            goto pools_status;
+        }
+    }
+#endif
+
     args = zg_args_new();
     zg_args_add_flag(args, "-H");
     zg_args_add_flag(args, "-p");
     zg_client_call_async("zpool.list", zg_args_to_json(args),
                          on_pools_list, page);
+
+pools_status:
+#ifdef HAVE_LIBZFS
+    if (zg_libzfs_available())
+    {
+        GPtrArray *local = zg_libzfs_pool_statuses();
+
+        if (local != NULL)
+        {
+            if (page->statuses != NULL)
+                g_ptr_array_free(page->statuses, TRUE);
+
+            page->statuses = local;
+            pools_rebuild(page);
+            return;
+        }
+    }
+#endif
 
     if (zg_app_json_output(page->app))
     {
@@ -1722,6 +1758,69 @@ pools_live_refresh(gpointer data)
     if (!zg_app_is_connected(page->app))
         return;
 
+#ifdef HAVE_LIBZFS
+    if (zg_libzfs_available())
+    {
+        GPtrArray *local = zg_libzfs_pools();
+
+        if (local != NULL)
+        {
+            GListModel *model;
+            guint i;
+            guint n;
+
+            if (page->pools != NULL)
+                g_ptr_array_free(page->pools, TRUE);
+            page->pools = local;
+
+            model = G_LIST_MODEL(page->store);
+            n = g_list_model_get_n_items(model);
+
+            for (i = 0; i < n; i++)
+            {
+                ZgRow *row = ZG_ROW(g_list_model_get_item(model, i));
+                const gchar *kind = zg_row_get_text(row, POOL_COL_KIND);
+                const gchar *name = zg_row_get_text(row, POOL_COL_POOLNAME);
+
+                if (g_strcmp0(kind, "pool") == 0)
+                {
+                    ZgPool *pool = zg_model_pool_find(page->pools, name);
+
+                    if (pool != NULL)
+                    {
+                        gchar *size = zg_format_bytes(pool->size);
+                        gchar *alloc = zg_format_bytes(pool->alloc);
+                        gchar *free_space = zg_format_bytes(pool->free);
+                        gchar *info = g_strdup_printf(
+                                "总 %s · 已用 %s · 可用 %s · %d%%", size, alloc,
+                                free_space, pool->capacity);
+                        gchar *extra = g_strdup_printf("碎片 %d%% · 去重 %.2fx",
+                                                       pool->fragmentation,
+                                                       pool->dedup_ratio);
+
+                        zg_row_set_text(row, POOL_COL_INFO, info);
+                        zg_row_set_text(row, POOL_COL_EXTRA, extra);
+                        zg_row_set_text(row, POOL_COL_STATE,
+                                        pool->health != NULL ? pool->health : "—");
+                        g_free(size);
+                        g_free(alloc);
+                        g_free(free_space);
+                        g_free(info);
+                        g_free(extra);
+                    }
+                }
+
+                g_object_unref(row);
+            }
+
+            if (page->sel_pool != NULL)
+                pools_update_overview(page, page->sel_pool);
+            pools_apply_usage(page);
+            return;
+        }
+    }
+#endif
+
     args = zg_args_new();
     zg_args_add_flag(args, "-H");
     zg_args_add_flag(args, "-p");
@@ -1784,7 +1883,7 @@ zg_page_pools_new(ZgApp *app)
         };
 
         page->table = zg_table_new_tree(page->store, columns,
-                                        G_N_ELEMENTS(columns));
+                                        G_N_ELEMENTS(columns), TRUE);
     }
 
     scrolled = gtk_scrolled_window_new();

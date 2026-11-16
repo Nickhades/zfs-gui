@@ -20,6 +20,7 @@ GtkWidget *zg_page_be_new(ZgApp *app);
 GtkWidget *zg_page_system_new(ZgApp *app);
 
 GtkWidget *zg_page_ops_new(ZgApp *app);
+GtkWidget *zg_page_backup_new(ZgApp *app);
 GtkWidget *zg_page_help_new(ZgApp *app);
 
 /* 帮助页字号缩放（Ctrl+加号/减号/0），返回是否处理 */

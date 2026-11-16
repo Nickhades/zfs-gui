@@ -59,7 +59,7 @@ zg_dialogs_window_new(GtkWindow *parent,
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), FALSE);
     gtk_window_set_titlebar(GTK_WINDOW(window), header);
 
-    close = gtk_button_new_from_icon_name("window-close-symbolic");
+    close = gtk_button_new_from_icon_name("zg-close-symbolic");
     gtk_widget_add_css_class(close, "flat");
     gtk_widget_add_css_class(close, "zg-window-control");
     gtk_widget_set_tooltip_text(close, "关闭 (Esc)");
@@ -637,7 +637,7 @@ zg_dialogs_password(GtkWindow *parent,
     body = zg_dialogs_body(window, NULL);
 
     header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
-    icon = gtk_image_new_from_icon_name("channel-secure-symbolic");
+    icon = gtk_image_new_from_icon_name("zg-secure-symbolic");
     gtk_image_set_pixel_size(GTK_IMAGE(icon), 42);
     gtk_widget_add_css_class(icon, "zg-lock-icon");
 
@@ -754,6 +754,11 @@ typedef struct
     ZgDialogDoneFunc done;
     gpointer user_data;
     guint attempts;
+    GtkWidget *progress_window;
+    GtkWidget *progress_bar;
+    GtkWidget *progress_label;
+    GTimer *progress_timer;
+    guint progress_source;
 } RunOp;
 
 static void
@@ -761,6 +766,18 @@ run_op_free(RunOp *run)
 {
     if (run == NULL)
         return;
+
+    if (run->progress_source != 0)
+    {
+        g_source_remove(run->progress_source);
+        run->progress_source = 0;
+    }
+
+    if (run->progress_timer != NULL)
+    {
+        g_timer_destroy(run->progress_timer);
+        run->progress_timer = NULL;
+    }
 
     g_free(run->op_id);
     g_free(run->args_json);
@@ -772,6 +789,110 @@ run_op_free(RunOp *run)
 static void on_run_op_done(GObject *source,
                            GAsyncResult *async_result,
                            gpointer user_data);
+
+/* 破坏性 / 长耗时操作的进度窗口 */
+static gboolean
+run_progress_tick(gpointer data)
+{
+    RunOp *run = data;
+    gdouble elapsed;
+    gchar *text;
+
+    if (run->progress_window == NULL)
+        return G_SOURCE_REMOVE;
+
+    elapsed = g_timer_elapsed(run->progress_timer, NULL);
+    text = g_strdup_printf("正在执行… 已用时 %.0f 秒", elapsed);
+    gtk_label_set_text(GTK_LABEL(run->progress_label), text);
+    gtk_progress_bar_pulse(GTK_PROGRESS_BAR(run->progress_bar));
+    g_free(text);
+
+    return G_SOURCE_CONTINUE;
+}
+
+static void
+run_progress_window_destroyed(GtkWidget *widget,
+                              gpointer data)
+{
+    RunOp *run = data;
+
+    (void)widget;
+
+    if (run->progress_source != 0)
+    {
+        g_source_remove(run->progress_source);
+        run->progress_source = 0;
+    }
+
+    run->progress_window = NULL;
+}
+
+static void
+run_progress_start(RunOp *run)
+{
+    const ZgOpDef *op = zg_op_lookup(run->op_id);
+    GtkWindow *window;
+    GtkWidget *body;
+    GtkWidget *command_label;
+
+    if (op == NULL || run->progress_window != NULL)
+        return;
+
+    if (!op->destructive && !op->long_running)
+        return;
+
+    window = zg_dialogs_window_new(zg_app_get_window(zg_app_get_default()),
+                                   op->title, 480, 260);
+    gtk_window_set_modal(GTK_WINDOW(window), TRUE);
+    gtk_window_set_deletable(GTK_WINDOW(window), FALSE);
+
+    body = zg_dialogs_body(window, NULL);
+    gtk_box_append(GTK_BOX(body), zg_ui_label_heading(op->title));
+    gtk_box_append(GTK_BOX(body), zg_ui_label_wrap(
+                                          op->description != NULL ? op->description
+                                                                  : "正在执行，请稍候…"));
+
+    command_label = zg_ui_label(run->command);
+    gtk_label_set_wrap(GTK_LABEL(command_label), TRUE);
+    gtk_label_set_selectable(GTK_LABEL(command_label), TRUE);
+    gtk_widget_add_css_class(command_label, "zg-mono");
+    gtk_box_append(GTK_BOX(body), command_label);
+
+    run->progress_bar = gtk_progress_bar_new();
+    gtk_progress_bar_set_pulse_step(GTK_PROGRESS_BAR(run->progress_bar), 0.08);
+    gtk_box_append(GTK_BOX(body), run->progress_bar);
+
+    run->progress_label = zg_ui_label("正在执行… 已用时 0 秒");
+    gtk_widget_add_css_class(run->progress_label, "zg-cell-bold");
+    gtk_box_append(GTK_BOX(body), run->progress_label);
+
+    run->progress_window = GTK_WIDGET(window);
+    run->progress_timer = g_timer_new();
+    g_signal_connect(window, "destroy",
+                     G_CALLBACK(run_progress_window_destroyed), run);
+    run->progress_source = g_timeout_add(500, run_progress_tick, run);
+
+    gtk_window_present(window);
+}
+
+static void
+run_progress_finish(RunOp *run)
+{
+    if (run->progress_source != 0)
+    {
+        g_source_remove(run->progress_source);
+        run->progress_source = 0;
+    }
+
+    if (run->progress_timer != NULL)
+    {
+        g_timer_destroy(run->progress_timer);
+        run->progress_timer = NULL;
+    }
+
+    if (run->progress_window != NULL)
+        gtk_window_destroy(GTK_WINDOW(run->progress_window));
+}
 
 static gboolean
 result_is_auth_problem(const ZgClientResult *result)
@@ -796,6 +917,8 @@ run_op_execute(RunOp *run,
         zg_app_log(app, "已通过管理员认证，执行 %s", run->command);
     else
         zg_app_log(app, "执行 %s", run->command);
+
+    run_progress_start(run);
 
     zg_client_call_async_auth(run->op_id, g_strdup(run->args_json),
                               username, password,
@@ -829,6 +952,8 @@ on_run_op_done(GObject *source,
     gboolean ok = (result != NULL && result->ok);
 
     (void)source;
+
+    run_progress_finish(run);
 
     /* 认证环节的问题：重新弹窗，而不是当成普通失败 */
     if (result_is_auth_problem(result) && run->attempts < 3)
@@ -2474,13 +2599,11 @@ on_destroy_accept(GtkButton *button,
     if (gtk_check_button_get_active(GTK_CHECK_BUTTON(dialog->force_check)))
         zg_args_add_flag(args, "-f");
 
-    if (gtk_check_button_get_active(GTK_CHECK_BUTTON(dialog->recursive_check)))
-        zg_args_add_flag(args, dialog->is_pool ? "-r" : "-r");
+    if (!dialog->is_pool &&
+        gtk_check_button_get_active(GTK_CHECK_BUTTON(dialog->recursive_check)))
+        zg_args_add_flag(args, "-r");
 
-    if (dialog->is_pool)
-        zg_args_add_positional(args, dialog->target);
-    else
-        zg_args_add_positional(args, dialog->target);
+    zg_args_add_positional(args, dialog->target);
 
     message = g_strdup_printf("%s 已销毁。", dialog->target);
 
@@ -2532,8 +2655,16 @@ void zg_dialogs_destroy_target(GtkWindow *parent,
     gtk_box_append(GTK_BOX(body), zg_ui_label_wrap(detail));
     g_free(detail);
 
-    dialog->recursive_check = gtk_check_button_new_with_label("递归处理子级 (-r)");
-    gtk_box_append(GTK_BOX(body), dialog->recursive_check);
+    if (is_pool)
+    {
+        gtk_box_append(GTK_BOX(body), zg_ui_label_dim(
+                                              "存储池销毁不支持递归 -r；池内全部数据集会一并销毁。"));
+    }
+    else
+    {
+        dialog->recursive_check = gtk_check_button_new_with_label("递归处理子级 (-r)");
+        gtk_box_append(GTK_BOX(body), dialog->recursive_check);
+    }
 
     dialog->force_check = gtk_check_button_new_with_label("强制销毁 (-f)");
     gtk_box_append(GTK_BOX(body), dialog->force_check);
@@ -2544,6 +2675,155 @@ void zg_dialogs_destroy_target(GtkWindow *parent,
     g_object_set_data_full(G_OBJECT(window), "zg-destroy", dialog, g_free);
 
     gtk_window_present(window);
+}
+
+/* ------------------------------------------------------------------------- */
+/* 重命名                                                                     */
+/* ------------------------------------------------------------------------- */
+
+typedef struct
+{
+    GtkWidget *window;
+    gchar *target;
+    GtkWidget *entry;
+    GtkWidget *parents_check;
+    ZgDialogDoneFunc done;
+    gpointer user_data;
+} RenameDialog;
+
+static gchar *
+rename_build_target(const gchar *target,
+                    const gchar *input)
+{
+    if (strchr(input, '@') != NULL || strchr(input, '/') != NULL)
+        return g_strdup(input);
+
+    if (strchr(target, '@') != NULL)
+    {
+        gchar *copy = g_strdup(target);
+        gchar *at = strchr(copy, '@');
+        gchar *result;
+
+        *at = '\0';
+        result = g_strdup_printf("%s@%s", copy, input);
+        g_free(copy);
+        return result;
+    }
+
+    {
+        const gchar *slash = strrchr(target, '/');
+
+        if (slash == NULL)
+            return g_strdup(input);
+
+        return g_strdup_printf("%.*s/%s", (gint)(slash - target), target, input);
+    }
+}
+
+static void
+on_rename_accept(GtkButton *button,
+                 gpointer user_data)
+{
+    RenameDialog *dialog = user_data;
+    const gchar *input = gtk_editable_get_text(GTK_EDITABLE(dialog->entry));
+    gchar *new_name;
+    gboolean is_snapshot = strchr(dialog->target, '@') != NULL;
+    ZgArgs *args;
+    gchar *message;
+
+    (void)button;
+
+    if (input == NULL || input[0] == '\0')
+    {
+        zg_dialogs_error(GTK_WINDOW(dialog->window), "新名称不能为空",
+                         "请输入新的数据集名称。");
+        return;
+    }
+
+    new_name = rename_build_target(dialog->target, input);
+
+    if (is_snapshot ? !zg_snapshot_name_valid(new_name)
+                    : !zg_dataset_name_valid(new_name))
+    {
+        zg_dialogs_error(GTK_WINDOW(dialog->window), "新名称非法",
+                         "请检查名称格式，例如 zroot/data 或 zroot/data@snap。");
+        g_free(new_name);
+        return;
+    }
+
+    args = zg_args_new();
+    zg_args_add_positional(args, dialog->target);
+    zg_args_add_positional(args, new_name);
+
+    if (gtk_check_button_get_active(GTK_CHECK_BUTTON(dialog->parents_check)))
+        zg_args_add_flag(args, "-p");
+
+    message = g_strdup_printf("已重命名为 %s", new_name);
+
+    {
+        ZgDialogDoneFunc done = dialog->done;
+        gpointer done_data = dialog->user_data;
+
+        gtk_window_destroy(GTK_WINDOW(dialog->window));
+        zg_dialogs_run_op(zg_app_get_window(zg_app_get_default()),
+                          "zfs.rename", args, message, done, done_data);
+    }
+
+    g_free(message);
+    g_free(new_name);
+}
+
+void zg_dialogs_rename(GtkWindow *parent,
+                       const gchar *target,
+                       ZgDialogDoneFunc done,
+                       gpointer data)
+{
+    RenameDialog *dialog = g_new0(RenameDialog, 1);
+    GtkWindow *window;
+    GtkWidget *body;
+    GtkWidget *grid;
+    GtkWidget *current;
+    GtkWidget *accept_button;
+    gint row = 0;
+
+    window = zg_dialogs_window_new(parent, "重命名", 640, 360);
+    dialog->window = GTK_WIDGET(window);
+    dialog->target = g_strdup(target);
+    dialog->done = done;
+    dialog->user_data = data;
+
+    body = zg_dialogs_body(window, NULL);
+    gtk_box_append(GTK_BOX(body), zg_ui_label_heading("重命名数据集 / 快照"));
+    gtk_box_append(GTK_BOX(body), zg_ui_label_wrap(
+                                          "输入新名称；只写简单名称时会在同一父级下重命名。"));
+
+    grid = gtk_grid_new();
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 12);
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 8);
+    gtk_box_append(GTK_BOX(body), grid);
+
+    current = zg_ui_label(target);
+    gtk_widget_add_css_class(current, "zg-mono");
+    gtk_label_set_selectable(GTK_LABEL(current), TRUE);
+    zg_dialogs_add_field(grid, &row, "当前名称", current, NULL);
+
+    dialog->entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(dialog->entry),
+                                   "新名称，例如 zroot/data-new 或 data-new");
+    zg_dialogs_add_field(grid, &row, "新名称", dialog->entry, NULL);
+
+    dialog->parents_check = gtk_check_button_new_with_label(
+            "创建缺失的父数据集 (-p)");
+    gtk_box_append(GTK_BOX(body), dialog->parents_check);
+
+    zg_dialogs_button_row(window, NULL, &accept_button, "重命名", FALSE);
+    g_signal_connect(accept_button, "clicked", G_CALLBACK(on_rename_accept), dialog);
+    g_signal_connect(dialog->entry, "activate", G_CALLBACK(on_rename_accept), dialog);
+
+    g_object_set_data_full(G_OBJECT(window), "zg-rename", dialog, g_free);
+
+    gtk_window_present(window);
+    gtk_widget_grab_focus(dialog->entry);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2712,8 +2992,13 @@ typedef struct
     GtkWidget *status;
     GtkWidget *close_button;
     GtkTextBuffer *log;
+    gchar *op_id;
+    gchar *title;
+    gchar *subject;
     gchar *target;
-    gchar *snapshot;
+    gchar *success_message;
+    ZgDialogDoneFunc done;
+    gpointer done_data;
     GTimer *timer;
     guint tick_source;
     gint refs;
@@ -2807,8 +3092,11 @@ backup_progress_unref(BackupProgress *progress)
     if (progress->timer != NULL)
         g_timer_destroy(progress->timer);
 
+    g_free(progress->op_id);
+    g_free(progress->title);
+    g_free(progress->subject);
     g_free(progress->target);
-    g_free(progress->snapshot);
+    g_free(progress->success_message);
     g_free(progress);
 }
 
@@ -2858,7 +3146,10 @@ on_backup_done(GObject *source,
 
     if (ok)
     {
-        zg_app_toast(zg_app_get_default(), "快照已备份到 %s", progress->target);
+        zg_app_toast(zg_app_get_default(), "%s",
+                     progress->success_message != NULL
+                             ? progress->success_message
+                             : "备份完成");
         zg_app_refresh_all(zg_app_get_default());
     }
     else
@@ -2867,19 +3158,20 @@ on_backup_done(GObject *source,
                    response != NULL ? response->message : "无应答");
     }
 
+    if (progress->done != NULL)
+        progress->done(ok, progress->done_data);
+
     g_free(size);
     zg_client_result_free(response);
     backup_progress_unref(progress);
 }
 
-static void
-backup_progress_start(GtkWindow *parent,
-                      const gchar *snapshot,
-                      const gchar *target,
-                      gchar *args_json,
-                      gboolean dryrun)
+void zg_dialogs_run_progress(GtkWindow *parent,
+                             const ZgProgressSpec *spec,
+                             ZgArgs *args)
 {
     BackupProgress *progress = g_new0(BackupProgress, 1);
+    gchar *args_json = zg_args_to_json(args);
     GtkWindow *window;
     GtkWidget *body;
     GtkWidget *grid;
@@ -2888,19 +3180,24 @@ backup_progress_start(GtkWindow *parent,
     GtkWidget *close_button;
     gint row = 0;
 
-    progress->target = g_strdup(target);
-    progress->snapshot = g_strdup(snapshot);
+    progress->op_id = g_strdup(spec->op_id);
+    progress->title = g_strdup(spec->title);
+    progress->subject = g_strdup(spec->subject);
+    progress->target = g_strdup(spec->target);
+    progress->success_message = g_strdup(spec->success_message);
+    progress->done = spec->done;
+    progress->done_data = spec->data;
+    progress->dryrun = spec->dryrun;
     progress->timer = g_timer_new();
-    progress->dryrun = dryrun;
     progress->refs = 2; /* 窗口 + 异步调用 */
 
-    window = zg_dialogs_window_new(parent, "快照备份", 760, 540);
+    window = zg_dialogs_window_new(parent, spec->title, 760, 540);
     gtk_window_set_modal(GTK_WINDOW(window), TRUE);
     gtk_window_set_deletable(GTK_WINDOW(window), FALSE);
     progress->window = GTK_WIDGET(window);
 
     body = zg_dialogs_body(window, NULL);
-    gtk_box_append(GTK_BOX(body), zg_ui_label_heading("正在备份快照"));
+    gtk_box_append(GTK_BOX(body), zg_ui_label_heading(spec->title));
     gtk_box_append(GTK_BOX(body), zg_ui_label_dim(
                                           "备份在后台执行；下面的进度会实时更新，完成后可关闭窗口。"));
 
@@ -2910,9 +3207,9 @@ backup_progress_start(GtkWindow *parent,
     gtk_widget_set_margin_top(grid, 8);
     gtk_box_append(GTK_BOX(body), grid);
 
-    zg_dialogs_add_field(grid, &row, "快照", zg_ui_label(snapshot), NULL);
+    zg_dialogs_add_field(grid, &row, "对象", zg_ui_label(spec->subject), NULL);
     {
-        GtkWidget *target_label = zg_ui_label(target);
+        GtkWidget *target_label = zg_ui_label(spec->target);
 
         gtk_label_set_wrap(GTK_LABEL(target_label), TRUE);
         gtk_label_set_selectable(GTK_LABEL(target_label), TRUE);
@@ -2955,10 +3252,10 @@ backup_progress_start(GtkWindow *parent,
         g_free(stamp);
         g_date_time_unref(now);
     }
-    backup_progress_append(progress, "快照：%s\n目标：%s\n\n", snapshot, target);
+    backup_progress_append(progress, "对象：%s\n目标：%s\n\n", spec->subject, spec->target);
 
     progress->tick_source = g_timeout_add(500, backup_progress_tick, progress);
-    zg_client_call_async("zfs.send", args_json, on_backup_done, progress);
+    zg_client_call_async(spec->op_id, args_json, on_backup_done, progress);
 
     gtk_window_present(window);
 }
@@ -3067,6 +3364,38 @@ void zg_dialogs_pick_save(GtkWindow *parent,
     g_object_unref(dialog);
 }
 
+static void
+on_pick_folder_done(GObject *source,
+                    GAsyncResult *result,
+                    gpointer user_data)
+{
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
+    GtkWidget *entry = user_data;
+    GFile *file = gtk_file_dialog_select_folder_finish(dialog, result, NULL);
+
+    if (file != NULL)
+    {
+        gchar *path = g_file_get_path(file);
+
+        if (path != NULL)
+            gtk_editable_set_text(GTK_EDITABLE(entry), path);
+
+        g_free(path);
+        g_object_unref(file);
+    }
+}
+
+void zg_dialogs_pick_folder(GtkWindow *parent,
+                            GtkWidget *entry)
+{
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+
+    gtk_file_dialog_set_title(dialog, "选择备份目录");
+    gtk_file_dialog_set_modal(dialog, TRUE);
+    gtk_file_dialog_select_folder(dialog, parent, NULL, on_pick_folder_done, entry);
+    g_object_unref(dialog);
+}
+
 void zg_dialogs_pick_open(GtkWindow *parent,
                           GtkWidget *entry)
 {
@@ -3149,16 +3478,13 @@ on_send_accept(GtkButton *button,
     {
         gboolean dryrun = gtk_check_button_get_active(
                 GTK_CHECK_BUTTON(dialog->dryrun_check));
-        gchar *args_json = zg_args_to_json(args);
-        gchar *snapshot_copy = g_strdup(snapshot);
-        gchar *output_copy = g_strdup(output);
+        gchar *message = g_strdup_printf("快照已备份到 %s", output);
+        ZgProgressSpec spec = {
+                "zfs.send", "快照备份", snapshot, output, message, dryrun, NULL, NULL};
 
         gtk_window_destroy(GTK_WINDOW(dialog->window));
-        backup_progress_start(zg_app_get_window(zg_app_get_default()),
-                              snapshot_copy, output_copy, args_json, dryrun);
-
-        g_free(snapshot_copy);
-        g_free(output_copy);
+        zg_dialogs_run_progress(zg_app_get_window(zg_app_get_default()), &spec, args);
+        g_free(message);
     }
 }
 

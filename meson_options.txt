@@ -1,2 +1,6 @@
 option('gui', type: 'feature', value: 'auto',
   description: '构建 GTK4 图形前端 zfs-gui；关闭后只构建特权守护进程 zfs-guid')
+
+option('libzfs', type: 'combo', choices: ['auto', 'enabled', 'disabled'],
+  value: 'auto',
+  description: 'GUI 使用 libzfs 读取存储池/数据集列表（失败自动回退守护进程）')

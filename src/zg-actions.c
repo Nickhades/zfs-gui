@@ -59,7 +59,7 @@ action_button_new(const ZgAction *action,
 
     if (action->needs_password)
     {
-        GtkWidget *lock = gtk_image_new_from_icon_name("channel-secure-symbolic");
+        GtkWidget *lock = gtk_image_new_from_icon_name("zg-secure-symbolic");
 
         gtk_image_set_pixel_size(GTK_IMAGE(lock), 12);
         gtk_widget_set_valign(lock, GTK_ALIGN_CENTER);
@@ -111,7 +111,7 @@ zg_action_panel_new(void)
 
     header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
 
-    panel->icon = gtk_image_new_from_icon_name("drive-harddisk-symbolic");
+    panel->icon = gtk_image_new_from_icon_name("zg-pool-symbolic");
     gtk_image_set_pixel_size(GTK_IMAGE(panel->icon), 30);
     gtk_widget_set_valign(panel->icon, GTK_ALIGN_START);
     gtk_widget_add_css_class(panel->icon, "zg-object-icon");
@@ -229,7 +229,7 @@ build_more_button(ActionPanel *panel,
     child = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
 
     {
-        GtkWidget *image = gtk_image_new_from_icon_name("view-more-symbolic");
+        GtkWidget *image = gtk_image_new_from_icon_name("zg-more-symbolic");
 
         gtk_image_set_pixel_size(GTK_IMAGE(image), 15);
         gtk_box_append(GTK_BOX(child), image);
@@ -275,7 +275,7 @@ void zg_action_panel_set(GtkWidget *panel_widget, const ZgPanelSpec *spec)
 
     gtk_image_set_from_icon_name(GTK_IMAGE(panel->icon),
                                  spec->icon != NULL ? spec->icon
-                                                    : "drive-harddisk-symbolic");
+                                                    : "zg-pool-symbolic");
     gtk_label_set_text(GTK_LABEL(panel->title),
                        spec->title != NULL ? spec->title : "未选择对象");
     gtk_label_set_text(GTK_LABEL(panel->subtitle),

@@ -196,7 +196,66 @@ ninja -C build install
 | `/usr/local/share/man/man8/zfs-guid.8` | 手册页 |
 | `/etc/pam.d/zfs-gui` | 危险操作二次认证使用的 PAM 服务配置 |
 
-### 3.6 制作 FreeBSD .pkg 安装包
+### 3.6 可选的 libzfs 只读快路径
+
+```sh
+meson setup build -Dlibzfs=enabled    # auto（默认）/ enabled / disabled
+```
+
+GUI 启动时尝试 `dlopen("libzfs.so.7")`，成功则用 libzfs 直接读取数据集列表
+（属性页仍走守护进程）；失败或没有 openzfs 运行库时自动回退守护进程。
+二进制**不链接** libzfs，因此没有该库的机器也能运行。
+可用 `ZFS_GUI_NO_LIBZFS=1` 强制回退，`ZFS_GUI_LIBZFS=/path/libzfs.so.7` 指定库路径。
+
+### 3.7 实验性：libzfs 执行层（阶段 B1）
+
+守护进程可选用 libzfs 执行部分数据集写操作（未实现的参数组合自动回退命令行）。
+默认关闭，开启方式：
+
+```sh
+sysrc zfsguid_libzfs_exec=YES
+service zfsguid restart
+```
+
+当前覆盖：
+
+- 数据集：`zfs.create`（`-p`/`-o`）、`zfs.destroy`（`-r` 递归）、`zfs.rename`
+  （`-f/-u/-r/-p`）、`zfs.set`（单个属性）、`zfs.snapshot`（`-r`/`-o`）、
+  `zfs.rollback`、`zfs.clone`（`-p`/`-o`）
+- 存储池：`zpool.create`（stripe/mirror/raidz1-3，`-o ashift=`）、`zpool.add`、
+  `zpool.remove`、`zpool.destroy`、`zpool.export`（`-f`）、`zpool.scrub`
+  （`-s`/`-p`）、`zpool.trim`（`-c`/`-s`/`-w`/`-d`/`-r`）、`zpool.online`、
+  `zpool.offline`（`-t`）
+- 存储池页的 vdev 树、健康状态、读写校验错误和容量直接由 libzfs 的
+  `zpool_get_config()` / `vdev_stats` 合成，不再依赖 `zpool status` 文本解析
+- 发送/接收（B3）：`zfs.send` 走 `zfs_send()`（`-i` 增量、`-I` 中间增量、
+  `-R` 递归、`-c`/`-p`/`-h`/`-P`/`-v`），`zfs.receive` 走 `zfs_receive()`
+  （`-F`/`-n`/`-u`/`-v`/`-d`/`-e`、`-o property=value`）；流文件以
+  `O_NOFOLLOW` 打开，发送进度仍通过文件大小轮询。`-x`、发送演练、断点续传
+  暂回退 CLI
+- 加密（B4）：`zfs.load-key`（`-n`/`-L`）、`zfs.unload-key`、
+  `zfs.change-key`（`-i`/`-o keyformat=...`）走 `zfs_crypto_load_key()` /
+  `zfs_crypto_unload_key()` / `zfs_crypto_rewrap()`；`zfs.create` 的
+  `-o encryption=... -o keyformat=... -o keylocation=...` 也由 libzfs 创建。
+  委派（`zfs.allow/unallow`）暂无公开 libzfs 高层 API，继续走 CLI；配额
+  通过 `zfs.set` 的 libzfs 路径设置
+
+带未实现参数的组合（如 `-R/-n` 的递归销毁、创建池时的 `-O/-m/-f`、
+`zpool.clear`、attach/replace 等）自动回退到原来的 `execv` 路径；
+环境变量 `ZFS_GUI_LIBZFS_EXEC=1` 等价。
+
+### 3.8 严格模式与 fd 加固
+
+守护进程默认对监听 socket 和连接 fd 调用 `cap_rights_limit()`（不进入
+`cap_enter`），只保留 accept/read/write/poll/getsockopt 所需权利。
+
+配置项 `strict_mode = on` 时：
+
+- 只允许已迁移到 libzfs 的操作；未迁移的操作直接拒绝，不回退 `execv`
+- 自动启用 libzfs 执行层（等价 `ZFS_GUI_LIBZFS_EXEC=1`）
+- 适合验证“无 exec”路径，但 bectl、attach/replace 等未迁移操作会不可用
+
+### 3.9 制作 FreeBSD .pkg 安装包
 
 ```sh
 sh packaging/build-pkg.sh            # 编译 + 打包
@@ -345,26 +404,47 @@ zfs-gui
 
 执行输出实时写入页面下方文本框；勾选 `-F` 时还会额外弹出破坏性确认。
 
-### 5.7 启动环境（FreeBSD 特有）
+### 5.7 系统备份
+
+左侧「系统备份」页把整个系统备份到外置盘，并提供管理入口：
+
+* **准备**：在外置盘上创建 ZFS 池（如 `backup`，挂载点 `/backup`），
+  在「备份目录」中选择该挂载点。
+* **全量备份**：选择源池（通常 `zroot`）→「全量备份」。自动创建
+  `zroot@sys-时间戳` 递归快照，并以 `-R` 发送为 `full-时间戳.zfs`，
+  弹出实时进度窗口。
+* **增量备份**：修改系统后点「增量备份」，自动以上一次成功备份的快照为起点
+  （`-i`），生成 `inc-时间戳.zfs`，无需手选起始快照。
+* **备份列表**：显示文件名、大小与时间；可删除所选备份（需要管理员密码）；
+  「恢复所选备份」会执行 `zfs receive -F -d <目标池>`（需要密码）。
+* **系统无法启动时**：用 FreeBSD 启动盘导入备份池，先接收全量、再按时间顺序
+  接收增量：
+  ```sh
+  zpool import backup
+  zfs receive -F -d <目标池> < full-时间戳.zfs
+  zfs receive -F -d <目标池> < inc-时间戳.zfs
+  ```
+
+### 5.8 启动环境（FreeBSD 特有）
 
 列出 `bectl list` 结果（名称、活动状态、挂载点、占用、创建时间）。
 支持创建、激活、重命名、挂载、卸载、导出、导入、销毁。
 
-### 5.8 命令中心（命令行等价物）
+### 5.9 命令中心（命令行等价物）
 
 日常操作请使用对象面板。若某个冷门功能尚未提供向导，可在
 **左侧导航 → 命令中心** 打开命令行等价物表单：
 按类别/关键字检索 86 个操作，双击条目打开表单，每个参数都有类型提示与即时校验，
 并实时预览最终命令。
 
-### 5.9 操作帮助
+### 5.10 操作帮助
 
 左侧导航的 **「操作帮助」** 汇总了每个页面的详细用法：连接与权限、存储池、
 数据集、快照、发送/接收、启动环境、系统、命令中心、安全认证、快捷键与常见问题；
 并自动生成 **全部受控操作参考**（按类别列出操作名、ID、说明与危险等级）。
 顶部搜索框可按关键词过滤主题，按 `Alt+8` 可直接跳转。
 
-### 5.10 系统
+### 5.11 系统
 
 ZFS 用户态/内核版本、JSON 输出能力、socket 路径、ARC 命中率与全部 kstat 统计、
 以及本界面发起的每一次命令的任务日志。
@@ -529,3 +609,8 @@ zfs-gui/
 - 完整许可证文本见 [`LICENSE`](LICENSE)。
 
 > 本软件按"现状"提供，不附带任何担保；销毁、回滚、格式化等操作请谨慎并自行备份。
+
+## 延伸阅读
+
+- [Capsicum 可行性评估与 bectl 例外](docs/CAPSICUM.md)
+- [只读查询与 libzfs 分离进度](docs/READ-ONLY-SEPARATION.md)

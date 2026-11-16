@@ -356,7 +356,8 @@ create_children(gpointer item,
 GtkWidget *
 zg_table_new_tree(GListStore *store,
                   const ZgTableColumn *cols,
-                  guint n_cols)
+                  guint n_cols,
+                  gboolean autoexpand)
 {
     GtkTreeListModel *tree_model;
     GtkWidget *view;
@@ -364,9 +365,11 @@ zg_table_new_tree(GListStore *store,
     tree_model = gtk_tree_list_model_new(G_LIST_MODEL(g_object_ref(store)),
                                          FALSE, FALSE, create_children,
                                          NULL, NULL);
-    gtk_tree_list_model_set_autoexpand(tree_model, TRUE);
+    gtk_tree_list_model_set_autoexpand(tree_model, autoexpand);
 
     view = table_common(G_LIST_MODEL(tree_model), cols, n_cols);
+    g_object_set_data_full(G_OBJECT(view), "zg-tree-model",
+                           tree_model, g_object_unref);
 
     g_object_unref(tree_model);
 
@@ -408,6 +411,103 @@ select_first_idle(gpointer data)
         gtk_selection_model_select_item(selection, 0, TRUE);
 
     return G_SOURCE_REMOVE;
+}
+
+void zg_table_reveal_path(GtkWidget *table,
+                          const gchar *const *names,
+                          guint n_names,
+                          ZgTableNameFunc name_func)
+{
+    GtkTreeListModel *model;
+    GtkTreeListRow *current = NULL;
+    GtkSelectionModel *selection;
+    guint i;
+
+    if (table == NULL || names == NULL || n_names == 0 || name_func == NULL)
+        return;
+
+    model = g_object_get_data(G_OBJECT(table), "zg-tree-model");
+    if (model == NULL)
+        return;
+
+    for (i = 0; i < n_names; i++)
+    {
+        GListModel *list;
+        GtkTreeListRow *found = NULL;
+        guint count;
+        guint j;
+
+        if (current == NULL)
+            list = g_object_ref(G_LIST_MODEL(model));
+        else
+            list = gtk_tree_list_row_get_children(current);
+
+        if (list == NULL)
+            break;
+
+        count = g_list_model_get_n_items(list);
+
+        for (j = 0; j < count; j++)
+        {
+            GtkTreeListRow *candidate = g_list_model_get_item(list, j);
+            ZgRow *row = gtk_tree_list_row_get_item(candidate);
+            const gchar *name = row != NULL ? name_func(row) : NULL;
+
+            if (g_strcmp0(name, names[i]) == 0)
+                found = candidate;
+            else
+                g_object_unref(candidate);
+
+            if (row != NULL)
+                g_object_unref(row);
+
+            if (found != NULL)
+                break;
+        }
+
+        g_object_unref(list);
+
+        if (current != NULL)
+            g_object_unref(current);
+
+        current = found;
+
+        if (current == NULL)
+            break;
+
+        if (i + 1 < n_names)
+            gtk_tree_list_row_set_expanded(current, TRUE);
+    }
+
+    selection = zg_table_get_selection(table);
+
+    if (current != NULL && selection != NULL)
+    {
+        guint count = g_list_model_get_n_items(G_LIST_MODEL(model));
+        guint position;
+
+        for (position = 0; position < count; position++)
+        {
+            GtkTreeListRow *row = g_list_model_get_item(G_LIST_MODEL(model), position);
+            gboolean match = (row == current);
+
+            g_object_unref(row);
+
+            if (match)
+            {
+                gtk_selection_model_select_item(selection, position, TRUE);
+                break;
+            }
+        }
+
+        g_object_unref(current);
+        return;
+    }
+
+    if (current != NULL)
+        g_object_unref(current);
+
+    zg_table_select_first(table);
 }
 
 void zg_table_select_first(GtkWidget *table)

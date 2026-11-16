@@ -22,6 +22,8 @@ desc="ZFS GUI privileged backend"
 
 : ${zfsguid_enable:="NO"}
 : ${zfsguid_config:="/usr/local/etc/zfs-gui.conf"}
+# 实验性：部分数据集/存储池写操作优先走 libzfs（失败自动回退命令行）
+: ${zfsguid_libzfs_exec:="NO"}
 
 command="/usr/local/sbin/zfs-guid"
 pidfile="/var/run/zfs-gui.pid"
@@ -36,6 +38,10 @@ zfsguid_prestart()
 	#   ldconfig 之前动态链接器找不到库，开机启动会静默失败。
 	if [ ! -x "${command}" ]; then
 		err 1 "${command} 不存在，请确认 /usr/local 已挂载"
+	fi
+
+	if checkyesno zfsguid_libzfs_exec; then
+		export ZFS_GUI_LIBZFS_EXEC=1
 	fi
 
 	# 运行目录由守护进程自行创建（0711）
