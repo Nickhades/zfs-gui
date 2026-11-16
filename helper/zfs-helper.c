@@ -195,61 +195,70 @@ static void
 handle_client(int fd)
 {
     guint32 length;
-    gchar *text;
-    ZgJson *root = NULL;
-    GError *error = NULL;
-    const gchar *op;
-    const gchar *dataset;
-    const gchar *options = "";
-    gboolean force;
-    gchar *message;
 
-    if (!read_full(fd, &length, sizeof(length)))
-        return;
-
-    length = g_ntohl(length);
-
-    if (length == 0 || length > 64 * 1024)
-        return;
-
-    text = g_malloc0((gsize)length + 1);
-    if (!read_full(fd, text, length))
+    while (read_full(fd, &length, sizeof(length)))
     {
+        gchar *text;
+        ZgJson *root = NULL;
+        GError *error = NULL;
+        const gchar *op;
+        const gchar *dataset;
+        const gchar *options = "";
+        gboolean force;
+        gchar *message;
+
+        length = g_ntohl(length);
+
+        if (length == 0 || length > 64 * 1024)
+            return;
+
+        text = g_malloc0((gsize)length + 1);
+        if (!read_full(fd, text, length))
+        {
+            g_free(text);
+            return;
+        }
+
+        root = zg_json_parse(text, -1, &error);
         g_free(text);
-        return;
-    }
 
-    root = zg_json_parse(text, -1, &error);
-    g_free(text);
+        if (root == NULL)
+        {
+            send_response(fd, FALSE, error != NULL ? error->message : "JSON 解析失败");
+            g_clear_error(&error);
+            continue;
+        }
 
-    if (root == NULL)
-    {
-        send_response(fd, FALSE, error != NULL ? error->message : "JSON 解析失败");
-        g_clear_error(&error);
-        return;
-    }
+        op = zg_json_object_get_string(root, "op");
+        dataset = zg_json_object_get_string(root, "dataset");
+        options = zg_json_object_get_string(root, "options");
+        force = zg_json_object_get_bool(root, "force", FALSE);
 
-    op = zg_json_object_get_string(root, "op");
-    dataset = zg_json_object_get_string(root, "dataset");
-    options = zg_json_object_get_string(root, "options");
-    force = zg_json_object_get_bool(root, "force", FALSE);
+        if (op == NULL || dataset == NULL ||
+            (g_strcmp0(op, "mount") != 0 && g_strcmp0(op, "unmount") != 0) ||
+            !zg_dataset_name_valid(dataset))
+        {
+            send_response(fd, FALSE, "请求参数非法");
+            zg_json_free(root);
+            continue;
+        }
 
-    if (op == NULL || dataset == NULL ||
-        (g_strcmp0(op, "mount") != 0 && g_strcmp0(op, "unmount") != 0) ||
-        !zg_dataset_name_valid(dataset))
-    {
-        send_response(fd, FALSE, "请求参数非法");
+        if (options == NULL)
+            options = "";
+
+        message = run_zfs(op, dataset, options, force);
+
+        {
+            gboolean ok = message == NULL;
+
+            if (ok)
+                message = g_strdup(g_strcmp0(op, "mount") == 0 ? "挂载成功"
+                                                               : "卸载成功");
+            send_response(fd, ok, message);
+        }
+        g_free(message);
         zg_json_free(root);
-        return;
     }
-
-    if (options == NULL)
-        options = "";
-
-    message = run_zfs(op, dataset, options, force);
-    send_response(fd, message == NULL, message);
-    g_free(message);
-    zg_json_free(root);
 }
 
 int main(int argc,
@@ -270,6 +279,7 @@ int main(int argc,
         socket_path = ZG_HELPER_SOCKET_DEFAULT;
 
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGCHLD, SIG_IGN);
 
     listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listen_fd < 0)
@@ -311,8 +321,19 @@ int main(int argc,
             continue;
         }
 
-        handle_client(client_fd);
-        close(client_fd);
+        {
+            pid_t pid = fork();
+
+            if (pid == 0)
+            {
+                close(listen_fd);
+                handle_client(client_fd);
+                close(client_fd);
+                _exit(0);
+            }
+
+            close(client_fd);
+        }
     }
 
     close(listen_fd);

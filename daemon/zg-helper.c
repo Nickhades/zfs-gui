@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <string.h>
+#include <sys/capsicum.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -17,6 +18,10 @@
 #include "zg-json.h"
 
 #define ZG_HELPER_SOCKET_DEFAULT "/var/run/zfs-gui/zfs-helper.sock"
+
+static int helper_fds[ZG_HELPER_POOL_SIZE];
+static guint helper_count;
+static gint helper_slot = -1;
 
 static ZgOpOutcome *
 helper_outcome(gboolean ok,
@@ -33,6 +38,83 @@ helper_outcome(gboolean ok,
     outcome->data_json = g_strdup("");
 
     return outcome;
+}
+
+gboolean
+zg_helper_pool_open(guint count,
+                    GError **error)
+{
+    const gchar *socket_path = g_getenv("ZFS_GUI_HELPER_SOCKET");
+    guint i;
+
+    if (count == 0 || count > ZG_HELPER_POOL_SIZE)
+    {
+        g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_INVAL,
+                    "Helper 连接数非法：%u", count);
+        return FALSE;
+    }
+
+    if (helper_count > 0)
+        return TRUE;
+
+    for (i = 0; i < count; i++)
+    {
+        struct sockaddr_un addr;
+        cap_rights_t rights;
+        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+        if (fd < 0)
+        {
+            g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno),
+                        "socket 失败：%s", g_strerror(errno));
+            zg_helper_pool_close();
+            return FALSE;
+        }
+
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        g_strlcpy(addr.sun_path, socket_path, sizeof(addr.sun_path));
+
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
+        {
+            g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno),
+                        "连接 Helper 失败：%s", g_strerror(errno));
+            close(fd);
+            zg_helper_pool_close();
+            return FALSE;
+        }
+
+        cap_rights_init(&rights, CAP_READ, CAP_WRITE);
+        if (cap_rights_limit(fd, &rights) != 0)
+        {
+            g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno),
+                        "限制 Helper fd 权利失败：%s", g_strerror(errno));
+            close(fd);
+            zg_helper_pool_close();
+            return FALSE;
+        }
+
+        helper_fds[i] = fd;
+        helper_count++;
+    }
+
+    return TRUE;
+}
+
+void zg_helper_pool_close(void)
+{
+    guint i;
+
+    for (i = 0; i < helper_count; i++)
+        close(helper_fds[i]);
+
+    helper_count = 0;
+    helper_slot = -1;
+}
+
+void zg_helper_set_slot(gint slot)
+{
+    helper_slot = slot;
 }
 
 gboolean
@@ -88,11 +170,9 @@ ZgOpOutcome *
 zg_helper_call(const ZgOpDef *op,
                const ZgOpRequest *request)
 {
-    const gchar *socket_path = g_getenv("ZFS_GUI_HELPER_SOCKET");
     const gchar *dataset = NULL;
     const gchar *options = "";
     const gchar *op_name;
-    struct sockaddr_un addr;
     ZgJsonWriter *writer;
     gchar *text = NULL;
     guint32 length;
@@ -100,9 +180,6 @@ zg_helper_call(const ZgOpDef *op,
     guint i;
     gboolean force = FALSE;
     ZgOpOutcome *outcome = NULL;
-
-    if (socket_path == NULL)
-        socket_path = ZG_HELPER_SOCKET_DEFAULT;
 
     if (request->positional->len > 0)
         dataset = g_ptr_array_index(request->positional, 0);
@@ -136,22 +213,14 @@ zg_helper_call(const ZgOpDef *op,
     zg_json_writer_end_object(writer);
     text = zg_json_writer_to_string(writer, NULL);
 
-    fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
+    if (helper_count == 0 || helper_slot < 0 ||
+        (guint)helper_slot >= helper_count)
     {
-        g_free(text);
-        return helper_outcome(FALSE, g_strerror(errno));
-    }
-
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    g_strlcpy(addr.sun_path, socket_path, sizeof(addr.sun_path));
-
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
-    {
-        outcome = helper_outcome(FALSE, "特权 Helper 不可用");
+        outcome = helper_outcome(FALSE, "特权 Helper 未预连接");
         goto out;
     }
+
+    fd = helper_fds[helper_slot];
 
     length = g_htonl((guint32)strlen(text));
     if (!write_full(fd, &length, sizeof(length)) ||
@@ -199,8 +268,6 @@ zg_helper_call(const ZgOpDef *op,
     }
 
 out:
-    if (fd >= 0)
-        close(fd);
     g_free(text);
     return outcome;
 }

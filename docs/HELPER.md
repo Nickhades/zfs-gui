@@ -27,15 +27,25 @@ GUI ──> zfs-guid（能力模式） ──socket──> zfs-helper（root，�
 - 主进程侧客户端：`daemon/zg-helper.c`，在 `capsicum_mode` 下把
   `zfs.mount/zfs.unmount` 路由给 Helper
 
-Helper 协议单独测试通过：
+Helper 协议单独测试通过；预连接池接入后，能力模式内的挂载链路也已打通：
 
 ```
-unmount code=0
-mount   code=0
-zgtest/data on /tmp/zgcap-mnt
+capsicum: 已预连接 5 个 Helper 通道
+capsicum: libzfs fd 注入完成，/dev/zfs fd=11
+已进入 Capsicum 能力模式
+mount   code=0 挂载成功
+unmount code=0 卸载成功
 ```
 
-## 3. 关键障碍：能力模式内不能新建 socket 连接
+## 3. 预连接池实现
+
+- 主进程在 `cap_enter()` 前建立 5 条 Helper 连接
+- 每条 fd 立即 `cap_rights_limit(CAP_READ | CAP_WRITE)`
+- 每个 fork 子进程分配一个独占槽位（父进程维护 pid→slot，reap 时释放）
+- Helper 改为每个连接 fork 一个处理进程，保持长连接、循环读写 JSON 帧
+- 子进程只使用自己的槽位，避免并发 JSON 帧交错
+
+## 4. 曾经的障碍与解决：能力模式内不能新建 socket 连接
 
 接入主守护进程后实测发现：
 
@@ -46,30 +56,18 @@ zgtest/data on /tmp/zgcap-mnt
 
 因此**不能**在能力模式内按需连接 Helper。
 
-## 4. 修正设计：预连接通道
+## 5. 设计选择
 
-推荐两种方案：
+已采用**预连接 socket 池**：
 
-### A. 预连接 socket 池（简单）
+- 不需要改 Helper 协议
+- 单线程 accept + fork 子进程；FreeBSD 允许在能力模式内 fork，
+  但禁止 exec（本架构不使用 exec）
+- 连接数与并发上限绑定（当前 5 条）
 
-1. 主进程在 `cap_enter()` 前建立 N 条到 Helper 的连接
-2. 每个 fork 子进程继承连接池
-3. 父进程为每个连接分配唯一的“在使用”标记，子进程只用自己的连接
-4. 连接断开后由父进程在能力模式外重连（或 Helper 侧支持重新握手）
+若未来并发 mount 需求增加，可改为父进程 broker 或扩大池。
 
-优点：不需要改 Helper 协议；缺点：连接数与并发上限绑定。
-
-### B. 父进程 broker
-
-1. 父进程保留唯一 Helper 连接
-2. 子进程通过继承的 `socketpair` 把请求发给父进程
-3. 父进程串行转发到 Helper
-
-优点：连接数固定；缺点：父进程需要多路复用与超时管理。
-
-无论哪种，`zfs-helper` 协议不变。
-
-## 5. 后续路线
+## 6. 后续路线
 
 1. 实现预连接 socket 池，让 capsicum 下的 mount/unmount 真正跑通
 2. `send/receive`：主进程在沙箱外打开文件 fd，通过 **SCM_RIGHTS** 把 fd
@@ -79,7 +77,7 @@ zgtest/data on /tmp/zgcap-mnt
    再用 `cap_rights_limit` 收窄 `/dev/log` fd
 5. 高危写操作（create/clone 等触发 mount 的操作）逐步迁移到 Helper
 
-## 6. 安全边界
+## 7. 安全边界
 
 - Helper 只接受 root 对端，socket 0600
 - Helper 不解析复杂参数：数据集名白名单校验，`options` 仅作为 `-o` 参数
