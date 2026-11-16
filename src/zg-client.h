@@ -74,6 +74,18 @@ void zg_client_call_async_auth(const gchar *op,
                                GAsyncReadyCallback callback,
                                gpointer user_data);
 
+typedef void (*ZgClientProgressFunc)(guint64 bytes, gpointer user_data);
+
+/* 带 fd 与进度帧的流式调用：send 传可写 fd，receive 传只读 fd */
+void zg_client_call_stream_async(const gchar *op,
+                                 gchar *args_json,
+                                 const gchar *file_path,
+                                 gboolean for_write,
+                                 ZgClientProgressFunc progress,
+                                 gpointer progress_data,
+                                 GAsyncReadyCallback callback,
+                                 gpointer user_data);
+
 ZgClientResult *zg_client_call_finish(GAsyncResult *result);
 
 void zg_client_result_free(ZgClientResult *result);

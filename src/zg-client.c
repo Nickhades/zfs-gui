@@ -6,6 +6,7 @@
 #include "zg-client.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -581,4 +582,262 @@ zg_client_call_finish(GAsyncResult *result)
     g_return_val_if_fail(g_task_is_valid(result, NULL), NULL);
 
     return g_task_propagate_pointer(G_TASK(result), NULL);
+}
+
+/* ------------------------------------------------------------------------- */
+/* 流式调用（fd + progress 帧）                                               */
+/* ------------------------------------------------------------------------- */
+
+typedef struct
+{
+    gchar *op;
+    gchar *args_json;
+    gchar *file_path;
+    gboolean for_write;
+    ZgClientProgressFunc progress;
+    gpointer progress_data;
+} StreamCall;
+
+typedef struct
+{
+    ZgClientProgressFunc callback;
+    gpointer user_data;
+    guint64 bytes;
+} StreamProgress;
+
+static gboolean
+stream_progress_idle(gpointer data)
+{
+    StreamProgress *event = data;
+
+    if (event->callback != NULL)
+        event->callback(event->bytes, event->user_data);
+
+    g_free(event);
+    return G_SOURCE_REMOVE;
+}
+
+static void
+stream_call_free(gpointer data)
+{
+    StreamCall *call = data;
+
+    if (call == NULL)
+        return;
+
+    g_free(call->op);
+    g_free(call->args_json);
+    g_free(call->file_path);
+    g_free(call);
+}
+
+static gboolean
+send_file_fd(gint sock,
+             gint file_fd)
+{
+    struct msghdr msg;
+    struct iovec iov;
+    char cbuf[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr *cmsg;
+    char byte = 'F';
+
+    memset(&msg, 0, sizeof(msg));
+    memset(cbuf, 0, sizeof(cbuf));
+    iov.iov_base = &byte;
+    iov.iov_len = 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cbuf;
+    msg.msg_controllen = sizeof(cbuf);
+    cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(cmsg), &file_fd, sizeof(file_fd));
+
+    return sendmsg(sock, &msg, MSG_NOSIGNAL) == 1;
+}
+
+static ZgClientResult *
+perform_stream_call(const StreamCall *call,
+                    GError **error)
+{
+    ZgJsonWriter *writer;
+    gchar *request;
+    gsize request_length = 0;
+    gint fd;
+    gint file_fd;
+    ZgClientResult *result = NULL;
+    GError *local_error = NULL;
+
+    fd = connect_to_daemon(&local_error);
+    if (fd < 0)
+    {
+        result = connection_failure(local_error != NULL ? local_error->message
+                                                        : "无法连接后台服务");
+        g_clear_error(&local_error);
+        return result;
+    }
+
+    writer = zg_json_writer_new();
+    zg_json_writer_begin_object(writer, NULL);
+    zg_json_writer_set_int(writer, ZG_KEY_VERSION, ZG_PROTOCOL_VERSION);
+    zg_json_writer_set_string(writer, ZG_KEY_OP, call->op);
+    zg_json_writer_set_raw(writer, ZG_KEY_ARGS,
+                           (call->args_json != NULL && call->args_json[0] != '\0')
+                                   ? call->args_json
+                                   : "{}");
+    zg_json_writer_set_bool(writer, "has_fd", TRUE);
+    zg_json_writer_set_bool(writer, "progress", TRUE);
+    zg_json_writer_end_object(writer);
+    request = zg_json_writer_to_string(writer, &request_length);
+
+    if (!zg_io_write_frame(fd, request, request_length, &local_error))
+    {
+        g_free(request);
+        close(fd);
+        result = connection_failure(local_error != NULL ? local_error->message
+                                                        : "发送请求失败");
+        g_clear_error(&local_error);
+        return result;
+    }
+    g_free(request);
+
+    file_fd = open(call->file_path,
+                   call->for_write ? (O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC)
+                                   : (O_RDONLY | O_CLOEXEC),
+                   0600);
+    if (file_fd < 0)
+    {
+        close(fd);
+        {
+            gchar *message = g_strdup_printf("打开文件失败：%s", g_strerror(errno));
+
+            result = connection_failure(message);
+            g_free(message);
+        }
+        return result;
+    }
+
+    if (!send_file_fd(fd, file_fd))
+    {
+        close(file_fd);
+        close(fd);
+        return connection_failure("向后台服务传递文件 fd 失败");
+    }
+    close(file_fd);
+
+    for (;;)
+    {
+        gchar *response = NULL;
+        gsize response_length = 0;
+        ZgJson *root;
+
+        response = zg_io_read_frame(fd, &response_length, &local_error);
+        if (response == NULL)
+        {
+            result = connection_failure(local_error != NULL ? local_error->message
+                                                            : "读取进度帧失败");
+            g_clear_error(&local_error);
+            break;
+        }
+
+        root = zg_json_parse(response, (gssize)response_length, &local_error);
+        if (root == NULL)
+        {
+            g_free(response);
+            result = connection_failure("进度帧不是合法 JSON");
+            g_clear_error(&local_error);
+            break;
+        }
+
+        if (g_strcmp0(zg_json_object_get_string_or(root, "type", ""), "progress") == 0)
+        {
+            if (call->progress != NULL)
+            {
+                StreamProgress *event = g_new0(StreamProgress, 1);
+
+                event->callback = call->progress;
+                event->user_data = call->progress_data;
+                event->bytes = (guint64)zg_json_object_get_int(root, "bytes", 0);
+                g_idle_add(stream_progress_idle, event);
+            }
+
+            zg_json_free(root);
+            g_free(response);
+            continue;
+        }
+
+        result = result_new();
+        result->ok = zg_json_object_get_bool(root, ZG_KEY_OK, FALSE);
+        result->code = (gint)zg_json_object_get_int(root, ZG_KEY_CODE, -1);
+
+        g_free(result->stdout_text);
+        result->stdout_text = g_strdup(zg_json_object_get_string_or(root, ZG_KEY_STDOUT, ""));
+        g_free(result->stderr_text);
+        result->stderr_text = g_strdup(zg_json_object_get_string_or(root, ZG_KEY_STDERR, ""));
+        g_free(result->message);
+        result->message = g_strdup(zg_json_object_get_string_or(root, ZG_KEY_MESSAGE, ""));
+
+        sanitize_utf8(&result->stdout_text);
+        sanitize_utf8(&result->stderr_text);
+        sanitize_utf8(&result->message);
+
+        zg_json_free(root);
+        g_free(response);
+        break;
+    }
+
+    close(fd);
+    return result;
+}
+
+static void
+stream_call_thread(GTask *task,
+                   gpointer source_object,
+                   gpointer task_data,
+                   GCancellable *cancellable)
+{
+    StreamCall *call = task_data;
+    GError *error = NULL;
+    ZgClientResult *result;
+
+    (void)source_object;
+    (void)cancellable;
+
+    result = perform_stream_call(call, &error);
+    if (result == NULL)
+        g_task_return_error(task, error != NULL ? error : g_error_new_literal(G_IO_ERROR, G_IO_ERROR_FAILED, "流式调用失败"));
+    else
+        g_task_return_pointer(task, result, (GDestroyNotify)zg_client_result_free);
+}
+
+void zg_client_call_stream_async(const gchar *op,
+                                 gchar *args_json,
+                                 const gchar *file_path,
+                                 gboolean for_write,
+                                 ZgClientProgressFunc progress,
+                                 gpointer progress_data,
+                                 GAsyncReadyCallback callback,
+                                 gpointer user_data)
+{
+    GTask *task;
+    StreamCall *call;
+
+    g_return_if_fail(op != NULL);
+    g_return_if_fail(file_path != NULL);
+
+    call = g_new0(StreamCall, 1);
+    call->op = g_strdup(op);
+    call->args_json = args_json;
+    call->file_path = g_strdup(file_path);
+    call->for_write = for_write;
+    call->progress = progress;
+    call->progress_data = progress_data;
+
+    task = g_task_new(NULL, NULL, callback, user_data);
+    g_task_set_source_tag(task, (gpointer)zg_client_call_stream_async);
+    g_task_set_task_data(task, call, stream_call_free);
+    g_task_run_in_thread(task, stream_call_thread);
+    g_object_unref(task);
 }
