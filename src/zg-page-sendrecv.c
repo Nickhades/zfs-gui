@@ -23,7 +23,12 @@ typedef struct
     ZgApp *app;
     GtkWidget *root;
 
-    GtkWidget *send_snapshot; /* GtkDropDown */
+    GtkWidget *send_snapshot; /* GtkMenuButton */
+    GtkWidget *snapshot_label;
+    GtkWidget *snapshot_popover;
+    GtkWidget *snapshot_search;
+    GtkWidget *snapshot_list;
+    guint snapshot_selected;
     GtkStringList *snapshots;
     gchar *selected_snapshot;
     GtkWidget *send_output;
@@ -342,25 +347,140 @@ clear_focusability(GtkWidget *widget)
 }
 
 static void
-on_snapshot_changed(GObject *object,
-                    GParamSpec *pspec,
-                    gpointer user_data)
+snapshot_apply_filter(SendRecvPage *page)
 {
-    SendRecvPage *page = user_data;
-    guint index = gtk_drop_down_get_selected(GTK_DROP_DOWN(object));
-    const gchar *text = NULL;
+    const gchar *text = gtk_editable_get_text(GTK_EDITABLE(page->snapshot_search));
+    GtkWidget *row = gtk_widget_get_first_child(page->snapshot_list);
+    guint index = 0;
 
-    (void)pspec;
+    while (row != NULL)
+    {
+        gboolean visible = TRUE;
 
-    if (index != GTK_INVALID_LIST_POSITION &&
-        index < g_list_model_get_n_items(G_LIST_MODEL(page->snapshots)))
-        text = gtk_string_list_get_string(page->snapshots, index);
+        if (text != NULL && text[0] != '\0')
+        {
+            const gchar *name = gtk_string_list_get_string(page->snapshots, index);
 
-    if (text != NULL && g_strcmp0(text, SEND_NO_SNAPSHOT) == 0)
-        text = NULL;
+            visible = name != NULL && strstr(name, text) != NULL;
+        }
+
+        gtk_widget_set_visible(row, visible);
+        row = gtk_widget_get_next_sibling(row);
+        index++;
+    }
+}
+
+static void
+snapshot_rebuild_list(SendRecvPage *page)
+{
+    GtkWidget *child;
+    guint i;
+    guint count = g_list_model_get_n_items(G_LIST_MODEL(page->snapshots));
+
+    while ((child = gtk_widget_get_first_child(page->snapshot_list)) != NULL)
+        gtk_list_box_remove(GTK_LIST_BOX(page->snapshot_list), child);
+
+    for (i = 0; i < count; i++)
+    {
+        const gchar *name = gtk_string_list_get_string(page->snapshots, i);
+        GtkWidget *label = gtk_label_new(name);
+        GtkWidget *row = gtk_list_box_row_new();
+
+        gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+        gtk_widget_set_margin_start(label, 8);
+        gtk_widget_set_margin_end(label, 8);
+        gtk_widget_set_margin_top(label, 4);
+        gtk_widget_set_margin_bottom(label, 4);
+        gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), label);
+        gtk_list_box_append(GTK_LIST_BOX(page->snapshot_list), row);
+    }
+
+    snapshot_apply_filter(page);
+}
+
+static void
+snapshot_select(SendRecvPage *page,
+                guint index)
+{
+    guint count = g_list_model_get_n_items(G_LIST_MODEL(page->snapshots));
+    const gchar *name;
+
+    if (index >= count)
+        return;
+
+    name = gtk_string_list_get_string(page->snapshots, index);
+    page->snapshot_selected = index;
 
     g_free(page->selected_snapshot);
-    page->selected_snapshot = g_strdup(text);
+    page->selected_snapshot =
+            (name != NULL && g_strcmp0(name, SEND_NO_SNAPSHOT) != 0)
+                    ? g_strdup(name)
+                    : NULL;
+
+    gtk_label_set_text(GTK_LABEL(page->snapshot_label),
+                       name != NULL ? name : SEND_NO_SNAPSHOT);
+    gtk_popover_popdown(GTK_POPOVER(page->snapshot_popover));
+}
+
+static void
+on_snapshot_row_activated(GtkListBox *list,
+                          GtkListBoxRow *row,
+                          gpointer user_data)
+{
+    SendRecvPage *page = user_data;
+
+    (void)list;
+
+    snapshot_select(page, (guint)gtk_list_box_row_get_index(row));
+}
+
+static void
+on_snapshot_search_changed(GtkSearchEntry *entry,
+                           gpointer user_data)
+{
+    (void)entry;
+    snapshot_apply_filter(user_data);
+}
+
+static GtkWidget *
+build_snapshot_selector(SendRecvPage *page)
+{
+    GtkWidget *button = gtk_menu_button_new();
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *scrolled = gtk_scrolled_window_new();
+
+    page->snapshot_label = gtk_label_new(SEND_NO_SNAPSHOT);
+    gtk_label_set_xalign(GTK_LABEL(page->snapshot_label), 0.0f);
+    gtk_menu_button_set_child(GTK_MENU_BUTTON(button), page->snapshot_label);
+    gtk_menu_button_set_always_show_arrow(GTK_MENU_BUTTON(button), TRUE);
+    gtk_widget_set_hexpand(button, TRUE);
+    gtk_widget_set_focusable(button, FALSE);
+
+    page->snapshot_search = gtk_search_entry_new();
+    gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(page->snapshot_search),
+                                          "搜索…");
+    g_signal_connect(page->snapshot_search, "search-changed",
+                     G_CALLBACK(on_snapshot_search_changed), page);
+    gtk_box_append(GTK_BOX(box), page->snapshot_search);
+
+    page->snapshot_list = gtk_list_box_new();
+    gtk_list_box_set_selection_mode(GTK_LIST_BOX(page->snapshot_list),
+                                    GTK_SELECTION_SINGLE);
+    g_signal_connect(page->snapshot_list, "row-activated",
+                     G_CALLBACK(on_snapshot_row_activated), page);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled),
+                                  page->snapshot_list);
+    gtk_widget_set_size_request(scrolled, 420, 320);
+    gtk_widget_set_vexpand(scrolled, TRUE);
+    gtk_box_append(GTK_BOX(box), scrolled);
+
+    page->snapshot_popover = gtk_popover_new();
+    gtk_popover_set_has_arrow(GTK_POPOVER(page->snapshot_popover), FALSE);
+    gtk_popover_set_child(GTK_POPOVER(page->snapshot_popover), box);
+    gtk_menu_button_set_popover(GTK_MENU_BUTTON(button),
+                                page->snapshot_popover);
+
+    return button;
 }
 
 static void
@@ -405,7 +525,8 @@ on_snapshot_list(GObject *source,
     if (count == 0)
     {
         gtk_string_list_append(page->snapshots, SEND_NO_SNAPSHOT);
-        gtk_drop_down_set_selected(GTK_DROP_DOWN(page->send_snapshot), 0);
+        snapshot_rebuild_list(page);
+        snapshot_select(page, 0);
         g_free(keep);
         zg_client_result_free(response);
         return;
@@ -422,8 +543,8 @@ on_snapshot_list(GObject *source,
         }
     }
 
-    gtk_drop_down_set_selected(GTK_DROP_DOWN(page->send_snapshot),
-                               found ? target : 0);
+    snapshot_rebuild_list(page);
+    snapshot_select(page, found ? target : 0);
 
     g_free(keep);
     zg_client_result_free(response);
@@ -468,8 +589,8 @@ populate_snapshots_local(SendRecvPage *page)
         }
     }
 
-    gtk_drop_down_set_selected(GTK_DROP_DOWN(page->send_snapshot),
-                               found ? target : 0);
+    snapshot_rebuild_list(page);
+    snapshot_select(page, found ? target : 0);
 
     g_ptr_array_free(snapshots, TRUE);
     g_free(keep);
@@ -565,10 +686,9 @@ on_send_clicked(GtkButton *button,
 
     if (snapshot == NULL)
     {
-        guint index = gtk_drop_down_get_selected(GTK_DROP_DOWN(page->send_snapshot));
+        guint index = page->snapshot_selected;
 
-        if (index != GTK_INVALID_LIST_POSITION &&
-            index < g_list_model_get_n_items(G_LIST_MODEL(page->snapshots)))
+        if (index < g_list_model_get_n_items(G_LIST_MODEL(page->snapshots)))
             snapshot = gtk_string_list_get_string(page->snapshots, index);
     }
 
@@ -753,10 +873,7 @@ build_send_group(SendRecvPage *page)
     gtk_widget_set_margin_top(grid, 6);
 
     page->snapshots = gtk_string_list_new(NULL);
-    page->send_snapshot = gtk_drop_down_new(G_LIST_MODEL(page->snapshots), NULL);
-    gtk_drop_down_set_enable_search(GTK_DROP_DOWN(page->send_snapshot), TRUE);
-    gtk_widget_set_hexpand(page->send_snapshot, TRUE);
-    clear_focusability(page->send_snapshot);
+    page->send_snapshot = build_snapshot_selector(page);
     {
         GtkWidget *snapshot_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         GtkWidget *refresh = gtk_button_new_from_icon_name("zg-refresh-symbolic");
@@ -768,9 +885,6 @@ build_send_group(SendRecvPage *page)
         zg_dialogs_add_field(grid, &row, "源快照", snapshot_row,
                              "从系统已有快照中选择，可按名称搜索");
     }
-    g_signal_connect(page->send_snapshot, "notify::selected",
-                     G_CALLBACK(on_snapshot_changed), page);
-
     {
         GtkWidget *output_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         GtkWidget *pick = gtk_button_new_from_icon_name("zg-folder-open-symbolic");
