@@ -304,24 +304,6 @@ static const gchar zg_css_extra[] =
         "\n"
         ".zg-help-list .zg-dim { font-size: 13px; }"
         "\n"
-        ".zg-snapshot-popover, .zg-snapshot-popover > contents, .zg-more-popover, .zg-more-popover > contents { background-color: @zg_surface; border: 1px solid @zg_border; border-radius: 12px; box-shadow: none; border-image: none; }"
-        "\n"
-        ".zg-snapshot-popover > arrow, .zg-more-popover > arrow { background-color: @zg_surface; border: none; }"
-        "\n"
-        ".popover menu, popover contents { padding: 4px; }"
-        "\n"
-        "popover contents button { padding: 8px 14px; min-height: 26px; border: none; box-shadow: none; outline: none; }"
-        "\n"
-        "popover contents button:hover { background-color: alpha(@zg_text, 0.06); border-radius: 8px; }"
-        "\n"
-        "popover contents button label { padding: 1px 0; }"
-        "\n"
-        ".zg-snapshot-popover > contents, .zg-more-popover > contents { border-radius: 12px; }"
-        "\n"
-        "popover.background, popover.background > contents, popover.menu > contents { background-color: @zg_surface; border: 1px solid @zg_border; border-radius: 12px; box-shadow: 0 6px 18px alpha(#000000, 0.12); border-image: none; }"
-        "\n"
-        "popover.background > arrow { background-color: @zg_surface; border: none; }"
-        "\n"
         "button:focus, button:focus-visible { outline: none; box-shadow: none; }"
         "\n"
         ".zg-ops-list row:hover { background-color: alpha(@zg_text, 0.05); }"
@@ -363,8 +345,6 @@ apply_desktop_theme(void)
 void zg_ui_init(void)
 {
     GtkCssProvider *provider = gtk_css_provider_new();
-
-    apply_desktop_theme();
 
     /* 使用内置图标（编译进二进制的 GResource），不依赖系统图标主题 */
     gtk_icon_theme_add_resource_path(

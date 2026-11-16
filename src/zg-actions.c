@@ -253,8 +253,6 @@ build_more_button(ActionPanel *panel,
         gtk_box_append(GTK_BOX(box), item);
     }
 
-    gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
-    gtk_widget_add_css_class(popover, "zg-more-popover");
     gtk_popover_set_child(GTK_POPOVER(popover), box);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(menu_button), popover);
 
