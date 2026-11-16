@@ -51,7 +51,7 @@ static int wframe(int fd, const char *t)
     }
     return 0;
 }
-static int sreq(int hf, const char *snap, int ffd, guint32 id)
+static int sreq(int hf, const char *op, const char *target, int ffd, guint32 id, gboolean force)
 {
     ZgJsonWriter *w = zg_json_writer_new();
     struct msghdr m;
@@ -65,8 +65,14 @@ static int sreq(int hf, const char *snap, int ffd, guint32 id)
 
     zg_json_writer_begin_object(w, NULL);
     zg_json_writer_set_int(w, "v", 1);
-    zg_json_writer_set_string(w, "op", "send_stream");
-    zg_json_writer_set_string(w, "snapshot", snap);
+    zg_json_writer_set_string(w, "op", op);
+    if (g_strcmp0(op, "send_stream") == 0)
+        zg_json_writer_set_string(w, "snapshot", target);
+    else
+    {
+        zg_json_writer_set_string(w, "target", target);
+        zg_json_writer_set_bool(w, "force", force);
+    }
     zg_json_writer_set_int(w, "req_id", (gint64)id);
     zg_json_writer_end_object(w);
     t = zg_json_writer_to_string(w, NULL);
@@ -108,7 +114,7 @@ static int istype(const char *f, const char *type)
     return ok;
 }
 
-static Out run(int cf, int hf, const char *snap, int ffd, guint32 id)
+static Out run(int cf, int hf, const char *op, const char *target, int ffd, guint32 id, gboolean force)
 {
     Out o = {0, NULL};
     ZgFrameBuffer *hb = zg_frame_buffer_new(1 << 20), *cb = zg_frame_buffer_new(1 << 16);
@@ -137,7 +143,7 @@ static Out run(int cf, int hf, const char *snap, int ffd, guint32 id)
     kevent(kq, &ch, 1, NULL, 0, NULL);
     EV_SET(&ch, 1, EVFILT_TIMER, EV_ADD | EV_ENABLE, 0, 1000, NULL);
     kevent(kq, &ch, 1, NULL, 0, NULL);
-    if (sreq(hf, snap, ffd, id))
+    if (sreq(hf, op, target, ffd, id, force))
     {
         o.msg = g_strdup("sreq");
         return o;
@@ -260,7 +266,24 @@ ZgOpOutcome *
 zg_task_send_stream(int client_fd, int helper_fd, const gchar *snapshot,
                     gint file_fd, guint32 req_id)
 {
-    Out o = run(client_fd, helper_fd, snapshot, file_fd, req_id);
+    Out o = run(client_fd, helper_fd, "send_stream", snapshot, file_fd, req_id, FALSE);
+    ZgOpOutcome *outcome = g_new0(ZgOpOutcome, 1);
+
+    outcome->ok = o.ok;
+    outcome->code = o.ok ? 0 : 1;
+    outcome->message = o.msg != NULL ? o.msg : g_strdup(o.ok ? "操作完成" : "操作失败");
+    outcome->stdout_text = g_strdup("");
+    outcome->stderr_text = g_strdup("");
+    outcome->data_json = g_strdup("");
+    return outcome;
+}
+
+ZgOpOutcome *
+zg_task_receive_stream(int client_fd, int helper_fd, const gchar *target,
+                       gint file_fd, gboolean force, guint32 req_id)
+{
+    Out o = run(client_fd, helper_fd, "receive_stream", target, file_fd,
+                req_id, force);
     ZgOpOutcome *outcome = g_new0(ZgOpOutcome, 1);
 
     outcome->ok = o.ok;

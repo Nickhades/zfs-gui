@@ -483,6 +483,11 @@ capsicum_receive_stream(const ZgOpRequest *request)
         return outcome;
     }
 
+    if (zg_progress_fd() >= 0 && zg_helper_slot_fd() >= 0)
+        return zg_task_receive_stream(zg_progress_fd(), zg_helper_slot_fd(),
+                                      target, request->io_fd, force,
+                                      (guint32)getpid());
+
     return zg_helper_receive_stream(target, request->io_fd, force);
 }
 
