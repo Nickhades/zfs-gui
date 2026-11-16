@@ -66,6 +66,7 @@ zg_policy_load(const gchar *path,
     policy->io_timeout = ZG_IO_TIMEOUT_SECONDS;
     policy->auth_mode = g_strdup("dangerous");
     policy->strict_mode = FALSE;
+    policy->capsicum_mode = FALSE;
     policy->auth_max_attempts = 3;
     policy->auth_lockout = 300;
 
@@ -136,6 +137,25 @@ zg_policy_load(const gchar *path,
             if (g_ascii_string_to_unsigned(value, 10, 0, G_MAXUINT, &timeout, NULL))
                 policy->io_timeout = (guint)timeout;
         }
+        else if (g_strcmp0(key, "capsicum_mode") == 0)
+        {
+            if (g_ascii_strcasecmp(value, "on") == 0 ||
+                g_ascii_strcasecmp(value, "yes") == 0 ||
+                g_ascii_strcasecmp(value, "true") == 0 ||
+                g_strcmp0(value, "1") == 0)
+                policy->capsicum_mode = TRUE;
+            else if (g_ascii_strcasecmp(value, "off") == 0 ||
+                     g_ascii_strcasecmp(value, "no") == 0 ||
+                     g_ascii_strcasecmp(value, "false") == 0 ||
+                     g_strcmp0(value, "0") == 0)
+                policy->capsicum_mode = FALSE;
+            else
+            {
+                g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_INVAL,
+                            "capsicum_mode 取值非法：%s（应为 on/off）", value);
+                return NULL;
+            }
+        }
         else if (g_strcmp0(key, "strict_mode") == 0)
         {
             if (g_ascii_strcasecmp(value, "on") == 0 ||
@@ -162,6 +182,8 @@ zg_policy_load(const gchar *path,
                 g_strcmp0(value, "none") == 0)
             {
                 g_free(policy->auth_mode);
+                if (policy->allowed_uids != NULL)
+                    g_array_free(policy->allowed_uids, TRUE);
                 policy->auth_mode = g_strdup(value);
             }
         }
@@ -204,6 +226,8 @@ void zg_policy_free(ZgPolicy *policy)
     g_free(policy->socket_path);
     g_free(policy->socket_group);
     g_free(policy->auth_mode);
+    if (policy->allowed_uids != NULL)
+        g_array_free(policy->allowed_uids, TRUE);
     g_free(policy);
 }
 
@@ -244,6 +268,12 @@ gboolean
 zg_policy_strict_mode(const ZgPolicy *policy)
 {
     return policy != NULL && policy->strict_mode;
+}
+
+gboolean
+zg_policy_capsicum_mode(const ZgPolicy *policy)
+{
+    return policy != NULL && policy->capsicum_mode;
 }
 
 const gchar *
@@ -322,6 +352,89 @@ zg_policy_socket_path(const ZgPolicy *policy)
 }
 
 gboolean
+zg_policy_precompute_identities(ZgPolicy *policy)
+{
+    GArray *uids;
+    GHashTable *gids;
+    struct passwd *pw;
+    guint i;
+
+    if (policy == NULL)
+        return FALSE;
+
+    uids = g_array_new(FALSE, FALSE, sizeof(uid_t));
+    gids = g_hash_table_new(g_direct_hash, g_direct_equal);
+
+    for (i = 0; policy->allowed_groups != NULL &&
+                policy->allowed_groups[i] != NULL;
+         i++)
+    {
+        struct group *gr = getgrnam(policy->allowed_groups[i]);
+
+        if (gr != NULL)
+            g_hash_table_add(gids, GINT_TO_POINTER((gint)gr->gr_gid));
+    }
+
+    for (i = 0; policy->allowed_users != NULL &&
+                policy->allowed_users[i] != NULL;
+         i++)
+    {
+        pw = getpwnam(policy->allowed_users[i]);
+
+        if (pw != NULL)
+        {
+            uid_t uid = pw->pw_uid;
+
+            g_array_append_val(uids, uid);
+        }
+    }
+
+    setpwent();
+
+    while ((pw = getpwent()) != NULL)
+    {
+        gid_t groups[NGROUPS_MAX];
+        gint ngroups = NGROUPS_MAX;
+        gint j;
+
+        if (getgrouplist(pw->pw_name, pw->pw_gid, groups, &ngroups) < 0)
+            continue;
+
+        for (j = 0; j < ngroups; j++)
+        {
+            if (g_hash_table_contains(gids, GINT_TO_POINTER((gint)groups[j])))
+            {
+                uid_t uid = pw->pw_uid;
+                gboolean found = FALSE;
+                guint k;
+
+                for (k = 0; k < uids->len; k++)
+                {
+                    if (uid == g_array_index(uids, uid_t, k))
+                    {
+                        found = TRUE;
+                        break;
+                    }
+                }
+
+                if (!found)
+                    g_array_append_val(uids, uid);
+                break;
+            }
+        }
+    }
+
+    endpwent();
+    g_hash_table_destroy(gids);
+
+    if (policy->allowed_uids != NULL)
+        g_array_free(policy->allowed_uids, TRUE);
+    policy->allowed_uids = uids;
+
+    return TRUE;
+}
+
+gboolean
 zg_policy_authorize(const ZgPolicy *policy,
                     uid_t uid,
                     gid_t gid,
@@ -341,6 +454,26 @@ zg_policy_authorize(const ZgPolicy *policy,
     /* root 始终允许 */
     if (uid == 0)
         return TRUE;
+
+    /* 能力模式：使用启动时预解析的 UID 列表，避免 passwd/group 查找 */
+    if (policy->allowed_uids != NULL)
+    {
+        guint i;
+
+        for (i = 0; i < policy->allowed_uids->len; i++)
+        {
+            if (uid == g_array_index(policy->allowed_uids, uid_t, i))
+            {
+                if (message != NULL)
+                    *message = g_strdup("已通过预解析的 allowed_users/allowed_groups 授权");
+                return TRUE;
+            }
+        }
+
+        if (message != NULL)
+            *message = g_strdup("用户不在允许列表内（allowed_users / allowed_groups）");
+        return FALSE;
+    }
 
     pw = getpwuid(uid);
 

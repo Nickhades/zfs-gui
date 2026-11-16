@@ -1484,6 +1484,7 @@ pools_refresh(gpointer data)
 {
     PoolsPage *page = data;
     ZgArgs *args;
+    gboolean have_pools = FALSE;
 
     if (!zg_app_is_connected(page->app))
         return;
@@ -1500,18 +1501,20 @@ pools_refresh(gpointer data)
 
             page->pools = local;
             pools_rebuild(page);
-            goto pools_status;
+            have_pools = TRUE;
         }
     }
 #endif
 
-    args = zg_args_new();
-    zg_args_add_flag(args, "-H");
-    zg_args_add_flag(args, "-p");
-    zg_client_call_async("zpool.list", zg_args_to_json(args),
-                         on_pools_list, page);
+    if (!have_pools)
+    {
+        args = zg_args_new();
+        zg_args_add_flag(args, "-H");
+        zg_args_add_flag(args, "-p");
+        zg_client_call_async("zpool.list", zg_args_to_json(args),
+                             on_pools_list, page);
+    }
 
-pools_status:
 #ifdef HAVE_LIBZFS
     if (zg_libzfs_available())
     {

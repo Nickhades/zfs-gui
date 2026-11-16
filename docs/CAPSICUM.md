@@ -159,3 +159,44 @@ FreeBSD 自带 libcasper：
 
 结论：**fd 注入（方案 A）仍是进入 Capsicum 的最短路径**；Casper 可作为
 系统统计类只读查询的补充，不作为 zfs/zpool 管理操作的替代。
+
+## 10. 守护进程接入（feature/capsicum-daemon）
+
+严格模式 + 能力模式的启动顺序已实现：
+
+1. 创建并限制监听 socket 权利
+2. 预解析 allowed_users/allowed_groups 为 UID 列表（能力模式无法查 passwd）
+3. 打开 `/dev/zfs`，`cap_rights_limit(CAP_IOCTL|CAP_FSTAT|CAP_EVENT)`
+4. 通过打过补丁的 `libzfs_init_fd()` 初始化并预热一次 ioctl
+5. `cap_enter()`
+6. 进入 accept 循环；子进程继承已注入的 libzfs handle
+
+配置：
+
+```ini
+strict_mode = on
+capsicum_mode = on
+```
+
+实测（临时池，子进程处于能力模式）：
+
+| 操作 | 结果 |
+|---|---|
+| `zfs.snapshot` | ✅ |
+| `zfs.set` | ✅ |
+| `zfs.destroy` | ✅ |
+| `zpool.scrub` 开始/停止 | ✅ |
+| `zfs.create` | ❌ permission denied（libzfs 创建后尝试 mount） |
+| `zfs.send` | ❌ 被显式拒绝（需要文件路径） |
+
+因此能力模式只放行已验证的操作；`create/clone/rename/rollback` 可能触发
+`mount(2)`，`export/destroy` 可能卸载数据集，`send/receive` 需要文件访问，
+这些留给独立的不受限 helper，或后续用预打开目录 fd 解决。
+
+注意：
+
+- 必须使用打过 `patches/openzfs-2.4.2-fd-injection.patch` 的 libzfs，
+  否则启动时 `capsicum 准备失败` 并拒绝启动
+- 能力模式下 PAM 重认证需要 passwd/组文件访问，`auth_mode` 应设为 `none`
+  或把需要密码的操作也交给 helper
+- syslog 在能力模式下可能打不开 `/dev/log`，生产环境建议先打开日志 socket

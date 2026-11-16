@@ -440,6 +440,8 @@ datasets_load_detail(DatasetsPage *page,
     DsContext *context;
     ZgArgs *args;
 
+    gboolean have_props = FALSE;
+
     if (dataset == NULL)
         return;
 
@@ -454,23 +456,25 @@ datasets_load_detail(DatasetsPage *page,
                 datasets_show_properties(page, local);
 
             g_ptr_array_free(local, TRUE);
-            goto dataset_space;
+            have_props = TRUE;
         }
     }
 #endif
 
-    args = zg_args_new();
-    zg_args_add_flag(args, "-H");
-    zg_args_add_flag(args, "-p");
-    zg_args_add_positional(args, "all");
-    zg_args_add_positional(args, dataset);
+    if (!have_props)
+    {
+        args = zg_args_new();
+        zg_args_add_flag(args, "-H");
+        zg_args_add_flag(args, "-p");
+        zg_args_add_positional(args, "all");
+        zg_args_add_positional(args, dataset);
 
-    context = g_new0(DsContext, 1);
-    context->page = page;
-    context->dataset = g_strdup(dataset);
-    zg_client_call_async("zfs.get", zg_args_to_json(args), on_ds_props, context);
-
-dataset_space:
+        context = g_new0(DsContext, 1);
+        context->page = page;
+        context->dataset = g_strdup(dataset);
+        zg_client_call_async("zfs.get", zg_args_to_json(args), on_ds_props,
+                             context);
+    }
 
     args = zg_args_new();
     zg_args_add_flag(args, "-H");

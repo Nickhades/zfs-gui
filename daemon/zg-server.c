@@ -29,6 +29,7 @@
 #include "zg-exec.h"
 #include "zg-io.h"
 #include "zg-json.h"
+#include "zg-libzfs-exec.h"
 #include "zg-log.h"
 #include "zg-opdef.h"
 #include "zg-ops.h"
@@ -504,6 +505,43 @@ int zg_server_run(const ZgPolicy *policy)
         return -1;
 
     limit_rights(server_fd, TRUE, "listen");
+
+    if (zg_policy_capsicum_mode(policy))
+    {
+        if (!zg_policy_strict_mode(policy))
+        {
+            zg_log_error("capsicum_mode 需要同时启用 strict_mode");
+            close(server_fd);
+            unlink(zg_policy_socket_path(policy));
+            return -1;
+        }
+
+        if (!zg_policy_precompute_identities((ZgPolicy *)policy))
+        {
+            zg_log_error("capsicum: 预解析允许用户/组失败");
+            close(server_fd);
+            unlink(zg_policy_socket_path(policy));
+            return -1;
+        }
+
+        if (!zg_libzfs_exec_capsicum_prepare())
+        {
+            zg_log_error("capsicum 准备失败（libzfs fd 注入不可用）");
+            close(server_fd);
+            unlink(zg_policy_socket_path(policy));
+            return -1;
+        }
+
+        if (cap_enter() != 0)
+        {
+            zg_log_error("cap_enter 失败：%s", g_strerror(errno));
+            close(server_fd);
+            unlink(zg_policy_socket_path(policy));
+            return -1;
+        }
+
+        zg_log_info("已进入 Capsicum 能力模式");
+    }
 
     zg_log_info("守护进程已启动，监听 %s（用户 %s / 组 %s）",
                 zg_policy_socket_path(policy),
