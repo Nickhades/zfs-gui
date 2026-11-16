@@ -94,6 +94,13 @@ executable('zfs-helper',
 
 test('scm_rights', scm_test)
 
+kqueue_test = executable('kqueue_frame_test',
+  files('tests/kqueue_frame_test.c'),
+  build_by_default: true,
+)
+
+test('kqueue_frame', kqueue_test)
+
 executable('zfs-guid',
   files(
     'daemon/zfs-guid.c',
