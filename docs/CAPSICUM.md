@@ -109,8 +109,11 @@ int libzfs_core_init_fd(int fd);
 `libzfs_init_fd()`；libzfs 内部通过 `F_DUPFD_CLOEXEC` 复制该 fd，不再自己
 `open("/dev/zfs")`。`libzfs_core` 也使用同一个注入 fd。
 
-补丁已通过 `patch -p1 --dry-run` 对 2.4.2 源码验证可干净应用；
-本机缺少 libtool，尚未完成编译验证。
+补丁已通过 `patch -p1 --dry-run` 对 2.4.2 源码验证可干净应用，并已完成
+完整编译与沙箱测试：`cap_enter()` 后 `open("/etc/passwd")` 与 `execv`
+均返回 ECAPMODE，而通过注入 fd 的 `zpool_iter` / `zfs_prop_get` 正常，
+fd 计数与 RSS 烟测无泄漏。注意 `libzfs_core` 需要 cap_enter 前完成一次
+ioctl 版本探测（sysctl），测试程序已处理。
 
 ## 8. 已实施：方案 C（低成本加固）
 

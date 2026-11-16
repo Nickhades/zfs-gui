@@ -613,4 +613,5 @@ zfs-gui/
 ## 延伸阅读
 
 - [Capsicum 可行性评估与 bectl 例外](docs/CAPSICUM.md)
+- [libzfs fd 注入口补丁](docs/LIBZFS-FD-INJECTION.md)
 - [只读查询与 libzfs 分离进度](docs/READ-ONLY-SEPARATION.md)

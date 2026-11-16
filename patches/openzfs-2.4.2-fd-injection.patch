@@ -1,0 +1,150 @@
+--- a/include/libzfs.h	2026-06-12 14:36:45.000000000 +0800
++++ b/include/libzfs.h	2026-11-16 17:25:33.763853000 +0800
+@@ -215,6 +215,19 @@
+  * Library initialization
+  */
+ _LIBZFS_H libzfs_handle_t *libzfs_init(void);
++
++/*
++ * Initialize libzfs using an already-open /dev/zfs file descriptor.
++ *
++ * The descriptor is duplicated internally; the caller keeps ownership and
++ * must close it.  This allows a process to open /dev/zfs, restrict the
++ * descriptor with cap_rights_limit(2), enter capability mode with
++ * cap_enter(2), and only then initialize libzfs.
++ *
++ * The descriptor should have been opened with O_RDWR|O_EXCL|O_CLOEXEC and
++ * must carry the CAP_IOCTL, CAP_DUP and CAP_FSTAT rights.
++ */
++_LIBZFS_H libzfs_handle_t *libzfs_init_fd(int fd);
+ _LIBZFS_H void libzfs_fini(libzfs_handle_t *);
+ 
+ _LIBZFS_H libzfs_handle_t *zpool_get_handle(zpool_handle_t *);
+--- a/include/libzfs_core.h	2026-06-12 14:36:45.000000000 +0800
++++ b/include/libzfs_core.h	2026-11-16 17:25:33.763951000 +0800
+@@ -40,6 +40,12 @@
+ #endif
+ 
+ _LIBZFS_CORE_H int libzfs_core_init(void);
++
++/*
++ * Same as libzfs_core_init(), but use (a duplicate of) the supplied
++ * /dev/zfs descriptor instead of opening the device.
++ */
++_LIBZFS_CORE_H int libzfs_core_init_fd(int fd);
+ _LIBZFS_CORE_H void libzfs_core_fini(void);
+ 
+ struct zfs_cmd;
+--- a/lib/libzfs/libzfs_util.c	2026-06-12 14:36:45.000000000 +0800
++++ b/lib/libzfs/libzfs_util.c	2026-11-16 17:25:33.764073000 +0800
+@@ -1051,19 +1051,40 @@
+ 	    (!strncasecmp(env, "YES", 3) && strnlen(env, 4) == 3) ||
+ 	    (!strncasecmp(env, "ON", 2) && strnlen(env, 3) == 2)));
+ }
++
++static libzfs_handle_t *libzfs_init_impl(int fd);
+ 
+ libzfs_handle_t *
+ libzfs_init(void)
+ {
+-	libzfs_handle_t *hdl;
+ 	int error;
+-	char *env;
+ 
+ 	if ((error = libzfs_load_module()) != 0) {
+ 		errno = error;
+ 		return (NULL);
+ 	}
++
++	return (libzfs_init_impl(-1));
++}
++
++libzfs_handle_t *
++libzfs_init_fd(int fd)
++{
++	if (fd < 0) {
++		errno = EINVAL;
++		return (NULL);
++	}
++
++	return (libzfs_init_impl(fd));
++}
+ 
++static libzfs_handle_t *
++libzfs_init_impl(int fd)
++{
++	libzfs_handle_t *hdl;
++	int error;
++	char *env;
++
+ 	if ((hdl = calloc(1, sizeof (libzfs_handle_t))) == NULL) {
+ 		return (NULL);
+ 	}
+@@ -1073,12 +1094,17 @@
+ 		return (NULL);
+ 	}
+ 
+-	if ((hdl->libzfs_fd = open(ZFS_DEV, O_RDWR|O_EXCL|O_CLOEXEC)) < 0) {
++	if (fd >= 0)
++		hdl->libzfs_fd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
++	else
++		hdl->libzfs_fd = open(ZFS_DEV, O_RDWR|O_EXCL|O_CLOEXEC);
++
++	if (hdl->libzfs_fd < 0) {
+ 		free(hdl);
+ 		return (NULL);
+ 	}
+ 
+-	if (libzfs_core_init() != 0) {
++	if (libzfs_core_init_fd(fd) != 0) {
+ 		(void) close(hdl->libzfs_fd);
+ 		free(hdl);
+ 		return (NULL);
+--- a/lib/libzfs_core/libzfs_core.c	2026-06-12 14:36:45.000000000 +0800
++++ b/lib/libzfs_core/libzfs_core.c	2026-11-16 17:25:33.764184000 +0800
+@@ -142,10 +142,20 @@
+ 
+ int
+ libzfs_core_init(void)
++{
++	return (libzfs_core_init_fd(-1));
++}
++
++int
++libzfs_core_init_fd(int fd)
+ {
+ 	(void) pthread_mutex_lock(&g_lock);
+ 	if (g_refcount == 0) {
+-		g_fd = open(ZFS_DEV, O_RDWR|O_CLOEXEC);
++		if (fd >= 0)
++			g_fd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
++		else
++			g_fd = open(ZFS_DEV, O_RDWR|O_CLOEXEC);
++
+ 		if (g_fd < 0) {
+ 			(void) pthread_mutex_unlock(&g_lock);
+ 			return (errno);
+--- a/lib/libzfs/libzfs_diff.c	2026-06-12 14:36:45.000000000 +0800
++++ b/lib/libzfs/libzfs_diff.c	2026-11-16 17:25:33.764257000 +0800
+@@ -728,7 +728,8 @@
+ {
+ 	di->zhp = zhp;
+ 
+-	di->cleanupfd = open(ZFS_DEV, O_RDWR | O_CLOEXEC);
++	di->cleanupfd = fcntl(zfs_get_handle(zhp)->libzfs_fd,
++	    F_DUPFD_CLOEXEC, 0);
+ 	VERIFY(di->cleanupfd >= 0);
+ 
+ 	if (get_snapshot_names(di, fromsnap, tosnap) != 0)
+--- a/lib/libzfs/libzfs_sendrecv.c	2026-06-12 14:36:45.000000000 +0800
++++ b/lib/libzfs/libzfs_sendrecv.c	2026-11-16 17:25:33.764466000 +0800
+@@ -2439,7 +2439,8 @@
+ 		++holdseq;
+ 		(void) snprintf(sdd.holdtag, sizeof (sdd.holdtag),
+ 		    ".send-%d-%llu", getpid(), (u_longlong_t)holdseq);
+-		sdd.cleanup_fd = open(ZFS_DEV, O_RDWR | O_CLOEXEC);
++		sdd.cleanup_fd = fcntl(zfs_get_handle(zhp)->libzfs_fd,
++		    F_DUPFD_CLOEXEC, 0);
+ 		if (sdd.cleanup_fd < 0) {
+ 			err = errno;
+ 			goto stderr_out;
