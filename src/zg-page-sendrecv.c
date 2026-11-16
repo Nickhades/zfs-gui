@@ -37,6 +37,7 @@ typedef struct
     GtkWidget *recv_dryrun;
 
     GtkTextBuffer *output_buffer;
+    GtkWidget *progress;
 } SendRecvPage;
 
 /* ------------------------------------------------------------------------- */
@@ -101,6 +102,12 @@ on_execute_done(GObject *source,
     zg_app_set_status(context->page->app, "%s %s", context->command,
                       (response != NULL && response->ok) ? "已完成" : "失败");
 
+    if (context->page->progress != NULL)
+    {
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(context->page->progress), 0.0);
+        gtk_widget_set_visible(context->page->progress, FALSE);
+    }
+
     if (response != NULL && response->ok)
         zg_app_refresh_all(context->page->app);
 
@@ -111,9 +118,28 @@ on_execute_done(GObject *source,
 }
 
 static void
-execute(SendRecvPage *page,
-        const gchar *op_id,
-        ZgArgs *args)
+on_stream_progress(guint64 bytes,
+                   gpointer user_data)
+{
+    SendRecvPage *page = user_data;
+    gchar *text;
+
+    if (page->progress == NULL)
+        return;
+
+    text = g_strdup_printf("已传输 %.2f MiB", (double)bytes / (1024.0 * 1024.0));
+    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress), text);
+    gtk_progress_bar_pulse(GTK_PROGRESS_BAR(page->progress));
+    gtk_widget_set_visible(page->progress, TRUE);
+    g_free(text);
+}
+
+static void
+execute_stream(SendRecvPage *page,
+               const gchar *op_id,
+               ZgArgs *args,
+               const gchar *file_path,
+               gboolean for_write)
 {
     gchar *json = zg_args_to_json(args);
     gchar *command = zg_dialogs_describe_args(op_id, json);
@@ -128,9 +154,18 @@ execute(SendRecvPage *page,
         append_output(page, notice);
         g_free(notice);
     }
-    zg_app_set_status(page->app, "正在执行 %s …", command);
 
-    zg_client_call_async(op_id, json, on_execute_done, context);
+    if (page->progress != NULL)
+    {
+        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress), "0 MiB");
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress), 0.0);
+        gtk_widget_set_visible(page->progress, TRUE);
+    }
+
+    zg_app_set_status(page->app, "正在执行 %s …", command);
+    zg_client_call_stream_async(op_id, json, file_path, for_write,
+                                on_stream_progress, page,
+                                on_execute_done, context);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -365,7 +400,7 @@ on_send_clicked(GtkButton *button,
 
     zg_args_set_io(args, "output", output);
 
-    execute(page, "zfs.send", args);
+    execute_stream(page, "zfs.send", args, output, TRUE);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -401,7 +436,7 @@ receive_request_start(gpointer data)
 
     zg_args_set_io(args, "input", request->input);
 
-    execute(request->page, "zfs.receive", args);
+    execute_stream(request->page, "zfs.receive", args, request->input, FALSE);
 
     g_free(request->target);
     g_free(request->input);
@@ -652,6 +687,11 @@ zg_page_sendrecv_new(ZgApp *app)
     gtk_box_append(GTK_BOX(output_row),
                    zg_ui_button("清空输出", G_CALLBACK(on_clear_output), page));
     gtk_box_append(GTK_BOX(content), output_row);
+
+    page->progress = gtk_progress_bar_new();
+    gtk_progress_bar_set_show_text(GTK_PROGRESS_BAR(page->progress), TRUE);
+    gtk_widget_set_visible(page->progress, FALSE);
+    gtk_box_append(GTK_BOX(content), page->progress);
 
     output_scrolled = zg_ui_text_view_new(&page->output_buffer, TRUE);
     gtk_widget_set_size_request(output_scrolled, -1, 240);
