@@ -53,3 +53,8 @@ void zg_progress_report(guint64 bytes)
 
     g_free(text);
 }
+
+int zg_progress_fd(void)
+{
+    return progress_fd;
+}

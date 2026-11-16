@@ -85,6 +85,12 @@ scm_test = executable('scm_rights_test',
   build_by_default: true,
 )
 
+zg_task_lib = static_library('zg-task',
+  files('daemon/zg-frame.c', 'daemon/zg-task.c'),
+  dependencies: [glib_dep],
+  include_directories: include_directories('daemon', 'common'),
+)
+
 executable('zfs-helper',
   files('helper/zfs-helper.c'),
   dependencies: [zgcommon_dep, glib_dep],
@@ -143,6 +149,7 @@ executable('zfs-guid',
     'daemon/zg-progress.c',
   ),
   dependencies: [zgcommon_dep, pam_dep, libzfs_dep],
+  link_with: zg_task_lib,
   c_args: use_libzfs ? ['-DHAVE_LIBZFS', '-Wno-gnu-include-next', '-Wno-variadic-macros'] : [],
   install: true,
   install_dir: get_option('sbindir'),

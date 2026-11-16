@@ -58,11 +58,11 @@ static int sreq(int hf, const char *snap, int ffd, guint32 id)
     struct iovec iov;
     char cb[CMSG_SPACE(sizeof(int))];
     struct cmsghdr *cm;
+    char byte = 'S';
     gchar *t;
-    guint8 fr[1024];
     guint32 be;
-    size_t tot;
     ssize_t n;
+
     zg_json_writer_begin_object(w, NULL);
     zg_json_writer_set_int(w, "v", 1);
     zg_json_writer_set_string(w, "op", "send_stream");
@@ -71,14 +71,18 @@ static int sreq(int hf, const char *snap, int ffd, guint32 id)
     zg_json_writer_end_object(w);
     t = zg_json_writer_to_string(w, NULL);
     be = g_htonl((guint32)strlen(t));
-    tot = 4 + strlen(t);
-    memcpy(fr, &be, 4);
-    memcpy(fr + 4, t, strlen(t));
+
+    if (write(hf, &be, 4) != 4 || write(hf, t, strlen(t)) != (ssize_t)strlen(t))
+    {
+        g_free(t);
+        return -1;
+    }
     g_free(t);
+
     memset(&m, 0, sizeof(m));
     memset(cb, 0, sizeof(cb));
-    iov.iov_base = fr;
-    iov.iov_len = tot;
+    iov.iov_base = &byte;
+    iov.iov_len = 1;
     m.msg_iov = &iov;
     m.msg_iovlen = 1;
     m.msg_control = cb;
@@ -88,10 +92,12 @@ static int sreq(int hf, const char *snap, int ffd, guint32 id)
     cm->cmsg_type = SCM_RIGHTS;
     cm->cmsg_len = CMSG_LEN(sizeof(int));
     memcpy(CMSG_DATA(cm), &ffd, sizeof(ffd));
+
     n = sendmsg(hf, &m, MSG_NOSIGNAL);
-    LOG("sreq sendmsg n=%zd errno=%d", n, errno);
-    return n > 0 ? 0 : -1;
+    LOG("sreq fd sendmsg n=%zd errno=%d", n, errno);
+    return n == 1 ? 0 : -1;
 }
+
 static int istype(const char *f, const char *type)
 {
     GError *e = NULL;
@@ -108,6 +114,17 @@ static Out run(int cf, int hf, const char *snap, int ffd, guint32 id)
     ZgFrameBuffer *hb = zg_frame_buffer_new(1 << 20), *cb = zg_frame_buffer_new(1 << 16);
     int kq = kqueue();
     struct kevent ch, ev[4];
+    fprintf(stderr, "[task] start client_fd=%d helper_fd=%d\n", cf, hf);
+    fflush(stderr);
+    {
+        uid_t u = (uid_t)-1;
+        gid_t g = (gid_t)-1;
+        if (getpeereid(hf, &u, &g) == 0)
+            fprintf(stderr, "[task] helper peer uid=%d gid=%d\n", (int)u, (int)g);
+        else
+            fprintf(stderr, "[task] helper peer failed errno=%d\n", errno);
+        fflush(stderr);
+    }
     struct timespec ts = {1, 0};
     if (kq < 0)
     {
@@ -149,12 +166,37 @@ static Out run(int cf, int hf, const char *snap, int ffd, guint32 id)
                 LOG("EOF fd=%d", fd);
                 if (fd == hf)
                 {
-                    o.msg = g_strdup("helper eof");
-                    done = 1;
+                    /* Helper 可能先写完最终帧再关闭；先把缓冲里的帧读完 */
+                    ZgFrameReadResult er = zg_frame_read(b, hf, NULL);
+                    gchar *ef = NULL;
+                    int ep;
+
+                    while ((ep = zg_frame_pop(b, &ef, NULL)) == 1)
+                    {
+                        wframe(cf, ef);
+                        if (!(istype(ef, "started") || istype(ef, "progress")))
+                        {
+                            o.ok = 1;
+                            o.msg = g_strdup(ef);
+                            done = 1;
+                        }
+                        g_free(ef);
+                        ef = NULL;
+                        if (done)
+                            break;
+                    }
+                    if (!done)
+                    {
+                        o.msg = g_strdup("helper eof");
+                        done = 1;
+                    }
                     break;
                 }
                 else
                 {
+                    struct kevent del;
+                    EV_SET(&del, cf, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+                    (void)kevent(kq, &del, 1, NULL, 0, NULL);
                     wframe(hf, "{\"op\":\"cancel\"}");
                     continue;
                 }

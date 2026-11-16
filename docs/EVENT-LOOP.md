@@ -232,3 +232,35 @@ task exits ok
 ```
 
 selftest 已加入 `kqueue_task_test`。
+
+## 14. 真实链路打通：CAP_EVENT 与两段式 fd
+
+真实 cancel 测试连续踩中三个接线问题：
+
+1. **CAP_EVENT**
+   Helper 池 fd 只限制了 `CAP_READ|CAP_WRITE`，`kevent(EV_ADD)` 返回 -1，
+   errno=93（ENOTCAPABLE）。
+   修复：`cap_rights_init(&rights, CAP_READ, CAP_WRITE, CAP_EVENT, CAP_GETSOCKOPT)`。
+
+2. **两段式 fd**
+   Helper 先读 JSON 帧，再单独 `recv_stream_fd()`。
+   task 必须：
+   ```c
+   write(helper_fd, length + json);
+   sendmsg(helper_fd, 1 字节 + SCM_RIGHTS(fd));
+   ```
+   不能把 fd 附在 JSON 首帧上。
+
+3. **Helper 关闭前先发最终帧**
+   Helper 取消后会先 `send_response` 再关闭连接。task 收到 `EV_EOF` 时必须先
+   drain 缓冲区，读取最终帧，否则会误报 "helper eof"。
+
+实测 64MB 随机数据 + cancel：
+
+```
+{'type': 'progress', 'req_id': ..., 'bytes': 8403224}
+{'ok': False, 'code': 1, 'message': 'zfs send 已取消'}
+PASS: zfs send gone
+```
+
+`pgrep -f "zfs send ..."` 断言通过。

@@ -85,7 +85,7 @@ zg_helper_pool_open(guint count,
             return FALSE;
         }
 
-        cap_rights_init(&rights, CAP_READ, CAP_WRITE);
+        cap_rights_init(&rights, CAP_READ, CAP_WRITE, CAP_EVENT, CAP_GETSOCKOPT);
         if (cap_rights_limit(fd, &rights) != 0)
         {
             g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno),
@@ -116,6 +116,14 @@ void zg_helper_pool_close(void)
 void zg_helper_set_slot(gint slot)
 {
     helper_slot = slot;
+}
+
+int zg_helper_slot_fd(void)
+{
+    if (helper_slot < 0 || (guint)helper_slot >= helper_count)
+        return -1;
+
+    return helper_fds[helper_slot];
 }
 
 gboolean
