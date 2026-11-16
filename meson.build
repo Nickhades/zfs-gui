@@ -80,6 +80,13 @@ zgcommon_dep = declare_dependency(
 # ---------------------------------------------------------------------------
 # 后端：特权守护进程 zfs-guid
 # ---------------------------------------------------------------------------
+executable('zfs-helper',
+  files('helper/zfs-helper.c'),
+  dependencies: [zgcommon_dep, glib_dep],
+  install: true,
+  install_dir: get_option('sbindir'),
+)
+
 executable('zfs-guid',
   files(
     'daemon/zfs-guid.c',
@@ -90,6 +97,7 @@ executable('zfs-guid',
     'daemon/zg-log.c',
     'daemon/zg-auth.c',
     'daemon/zg-libzfs-exec.c',
+    'daemon/zg-helper.c',
   ),
   dependencies: [zgcommon_dep, pam_dep, libzfs_dep],
   c_args: use_libzfs ? ['-DHAVE_LIBZFS', '-Wno-gnu-include-next', '-Wno-variadic-macros'] : [],

@@ -20,6 +20,7 @@
 
 #include "zg-auth.h"
 #include "zg-exec.h"
+#include "zg-helper.h"
 #include "zg-json.h"
 #include "zg-libzfs-exec.h"
 #include "zg-log.h"
@@ -467,6 +468,10 @@ zg_op_execute(const ZgOpDef *op,
         outcome = system_info(policy);
     else if (g_strcmp0(op->id, "system.arcstats") == 0)
         outcome = system_arcstats();
+    else if (zg_policy_capsicum_mode(policy) && zg_helper_supports(op->id))
+    {
+        outcome = zg_helper_call(op, request);
+    }
     else if (zg_policy_capsicum_mode(policy) &&
              !zg_libzfs_exec_capsicum_supports(op->id))
     {
