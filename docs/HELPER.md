@@ -207,3 +207,55 @@ zgtest/recv@s1
 - 取消：客户端断开后 Helper 不会中止正在运行的 `zfs send`
 - 进度/COMPLETED 状态机：当前同步等待，长时间占用一个预连接槽
 - `receive_stream`：方向相反，尚未接入
+
+## 11. 取消机制（已实现）
+
+Helper 的 `send_stream` 不再阻塞等待 `zfs send` 结束：
+
+1. Helper fork 出发送子进程，子进程把流写入 fd
+2. Helper 连接进程用 `poll()` 监听控制 socket（100ms 超时）
+3. 客户端关闭连接（EOF）或发送任意 CANCEL 数据 → `SIGTERM` 终止发送子进程
+4. 子进程退出后 Helper 回复 `zfs send 已取消`（客户端已断开时忽略写失败）
+5. Helper 每个连接独立 fork，因此取消不会影响其他 ZFS 请求
+
+实测：用 32MB 数据集 + 不读取的 pipe 制造阻塞，客户端关闭 socket 后
+`pgrep "zfs send"` 为空，Helper 进程仍存活。
+
+## 12. 二进制协议设计（下一步）
+
+当前控制通道仍是 JSON（4 字节长度 + JSON）。长流状态机建议升级为：
+
+```c
+struct zfs_req_header {
+    uint32_t magic;       /* 0x5A465300 "ZFS\0" */
+    uint32_t op_code;     /* SEND_STREAM / RECEIVE_STREAM / CANCEL */
+    uint32_t req_id;      /* 请求 ID，异步状态匹配 */
+    uint32_t payload_len;
+};
+```
+
+状态包（Helper → Daemon，同一 req_id）：
+
+| op_code | 含义 | payload |
+|---|---|---|
+| `STARTED` | 已开始 | dataset/snapshot |
+| `PROGRESS` | 进度 | `{bytes_transferred}` |
+| `COMPLETED` | 完成 | `{exit_code}` |
+| `FAILED` | 失败 | `{exit_code, message}` |
+| `CANCELED` | 已取消 | 空 |
+
+进度实现建议（Proxy FD）：
+
+1. Helper 创建 pipe
+2. `zfs send` 写 pipe 写端
+3. Helper 线程/进程从读端读，写入最终 SCM_RIGHTS fd，同时累计字节数
+4. 每 100ms 或每 64MB 发一个 PROGRESS 包
+
+取消仍用同一控制连接：Daemon 收到 GUI 取消后发送 `CANCEL(req_id)`；
+Helper 对对应长任务子进程发 SIGTERM。
+
+### 当前限制
+
+- JSON 控制通道仍同步等待最终结果；PROGRESS 未实现
+- 每次长流占用一个预连接 Helper 槽位（共 5 个）
+- CANCEL 目前依赖连接 EOF 或任意字节触发，没有 req_id 精确匹配

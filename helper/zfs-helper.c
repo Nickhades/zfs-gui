@@ -13,6 +13,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <glib.h>
 #include <signal.h>
 #include <stdio.h>
@@ -227,11 +228,16 @@ recv_stream_fd(int sock)
 }
 
 static gchar *
-run_send_stream(const gchar *snapshot,
-                int out_fd)
+run_send_stream(int control_fd,
+                const gchar *snapshot,
+                int out_fd,
+                gboolean *canceled)
 {
     pid_t pid;
     int status = 0;
+    gboolean stop = FALSE;
+
+    *canceled = FALSE;
 
     pid = fork();
     if (pid < 0)
@@ -247,7 +253,44 @@ run_send_stream(const gchar *snapshot,
         _exit(127);
     }
 
-    waitpid(pid, &status, 0);
+    close(out_fd);
+
+    while (!stop)
+    {
+        struct pollfd pfd;
+        int ready;
+        pid_t done;
+
+        pfd.fd = control_fd;
+        pfd.events = POLLIN | POLLHUP;
+        pfd.revents = 0;
+
+        ready = poll(&pfd, 1, 100);
+
+        if (ready > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR)))
+        {
+            char buffer[64];
+
+            /* 客户端发来 CANCEL 或直接断开：两者都终止发送 */
+            (void)recv(control_fd, buffer, sizeof(buffer), MSG_DONTWAIT);
+            *canceled = TRUE;
+            stop = TRUE;
+        }
+
+        done = waitpid(pid, &status, WNOHANG);
+        if (done == pid)
+            break;
+
+        if (stop)
+        {
+            kill(pid, SIGTERM);
+            waitpid(pid, &status, 0);
+            break;
+        }
+    }
+
+    if (*canceled)
+        return g_strdup("zfs send 已取消");
 
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         return g_strdup_printf("zfs send 失败（exit=%d）",
@@ -327,9 +370,14 @@ handle_client(int fd)
                 continue;
             }
 
-            message = run_send_stream(snapshot, out_fd);
-            close(out_fd);
-            send_response(fd, message == NULL, message);
+            {
+                gboolean canceled = FALSE;
+
+                message = run_send_stream(fd, snapshot, out_fd, &canceled);
+                send_response(fd, message == NULL, message);
+                if (canceled)
+                    break;
+            }
             g_free(message);
             zg_json_free(root);
             continue;
