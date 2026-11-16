@@ -1,0 +1,23 @@
+# ZFS 管理工具 C 代码格式规范
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++17
+IndentWidth: 4
+ContinuationIndentWidth: 8
+TabWidth: 4
+UseTab: Never
+BreakBeforeBraces: Allman
+ColumnLimit: 0
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+PointerAlignment: Right
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+AlignAfterOpenBracket: Align
+AlignOperands: Align
+IndentCaseLabels: false
+SortIncludes: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1

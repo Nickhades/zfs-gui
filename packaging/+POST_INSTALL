@@ -1,0 +1,13 @@
+#!/bin/sh
+# +POST_INSTALL - 安装后启用并重启后台服务
+set -e
+
+sysrc zfsguid_enable=YES >/dev/null 2>&1 || true
+
+if service zfsguid status >/dev/null 2>&1; then
+    service zfsguid restart >/dev/null 2>&1 || true
+else
+    service zfsguid start >/dev/null 2>&1 || true
+fi
+
+exit 0

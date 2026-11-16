@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ZFS Manager
+Name[zh_CN]=ZFS 管理工具
+Comment=Graphical ZFS manager for FreeBSD (zpool / zfs / bectl)
+Comment[zh_CN]=FreeBSD ZFS 图形化管理工具（zpool / zfs / bectl）
+Exec=zfs-gui
+Icon=zfs-gui
+Terminal=false
+StartupNotify=true
+Categories=System;Filesystem;
+Keywords=zfs;zpool;freebsd;storage;pool;dataset;snapshot;

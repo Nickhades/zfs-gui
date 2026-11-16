@@ -1,0 +1,9 @@
+# zfs-gui 危险操作的二次认证
+#
+# 只有通过此 PAM 服务验证、且属于管理员集合（root / allowed_users /
+# allowed_groups）的账号才能执行销毁、回滚、替换设备等危险操作。
+#
+# 如需改用 Kerberos / SSH 密钥等后端，按需增删下列行即可。
+
+auth		required	pam_unix.so		no_warn try_first_pass
+account		required	pam_unix.so

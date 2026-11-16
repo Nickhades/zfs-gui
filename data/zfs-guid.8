@@ -1,0 +1,150 @@
+.\" zfs-guid.8 - ZFS GUI privileged backend manual page
+.\"
+.\" Copyright (c) 2026
+.\" BSD-2-Clause
+.\"
+.Dd November 8, 2026
+.Dt ZFS-GUID 8
+.Os FreeBSD
+.Sh NAME
+.Nm zfs-guid
+.Nd ZFS GUI privileged backend service
+.Sh SYNOPSIS
+.Nm
+.Op Fl f
+.Op Fl c Ar config
+.Op Fl p Ar pidfile
+.Op Fl v
+.Sh DESCRIPTION
+.Nm
+is the privileged backend of the
+.Xr zfs-gui 1
+graphical manager.  It runs as
+.Sq root
+and executes only operations registered in a built-in whitelist,
+using
+.Xr execv 3
+with an argument vector; no shell is ever invoked.
+.Pp
+The frontend connects through a
+.Ux
+domain socket, normally
+.Pa /var/run/zfs-gui/zfs-gui.sock .
+Peer credentials are obtained with
+.Xr getpeereid 2
+and checked against the configured user and group lists.
+.Pp
+The following options are available:
+.Bl -tag -width Ds
+.It Fl f
+Run in the foreground and log to standard error.  Useful for debugging.
+.It Fl c Ar config
+Read configuration from
+.Ar config .
+The default is
+.Pa /usr/local/etc/zfs-gui.conf .
+.It Fl p Ar pidfile
+Write the process ID to
+.Ar pidfile .
+The default is
+.Pa /var/run/zfs-gui.pid .
+.It Fl v
+Print the version and exit.
+.El
+.Sh CONFIGURATION
+The configuration file uses
+.Ql key = value
+lines; lines starting with
+.Ql #
+are comments.
+.Bl -tag -width allowed_groups
+.It Cm allowed_users
+Comma-separated list of user names allowed to connect.
+Root is always allowed.
+.It Cm allowed_groups
+Comma-separated list of group names allowed to connect.
+The default is
+.Ql wheel .
+.It Cm socket_path
+Path of the
+.Ux
+socket.
+.It Cm socket_group
+Group that owns the socket file.
+.It Cm socket_mode
+Octal permissions of the socket file.
+The default is
+.Ql 0660 .
+.It Cm io_timeout
+Timeout in seconds for ordinary operations; zero disables the limit.
+.It Cm auth_mode
+Password policy for dangerous operations:
+.Ql dangerous
+(the default; only destructive operations require a password),
+.Ql all
+(every state-changing operation requires a password), or
+.Ql none
+(never ask; not recommended).
+.It Cm auth_max_attempts
+Number of consecutive failed authentications before the user is locked out.
+The default is 3.
+.It Cm auth_lockout
+Lockout duration in seconds.
+The default is 300.
+.El
+.Sh SECURITY CONSIDERATIONS
+Destructive operations additionally require the calling user to re-enter an
+administrator password, which is verified through
+.Xr pam 3
+using the
+.Ql zfs-gui
+service (falling back to
+.Ql system ) .
+The authenticated account must also be an administrator (root, or a member of
+.Cm allowed_groups ) .
+Passwords are never logged and are wiped from memory after use.
+Failed attempts are rate limited per user ID.
+.Pp
+The daemon grants its clients the ability to run privileged ZFS
+operations.  Restrict
+.Cm allowed_groups
+to administrators, and keep
+.Cm socket_group
+in sync so that the socket file itself is not reachable by
+unprivileged users.
+.Pp
+Because every request is validated against the built-in operation table,
+unknown operations, unknown flags, unknown options, and positional
+arguments beginning with
+.Ql -
+are rejected.
+.Sh FILES
+.Bl -tag -width /usr/local/etc/zfs-gui.conf -compact
+.It Pa /usr/local/etc/zfs-gui.conf
+Default configuration file.
+.It Pa /etc/pam.d/zfs-gui
+PAM service used for password re-authentication.
+.It Pa /var/run/zfs-gui/zfs-gui.sock
+Default socket path.
+.It Pa /var/run/zfs-gui.pid
+Default PID file.
+.El
+.Sh EXAMPLES
+Enable and start the service:
+.Bd -literal -offset indent
+sysrc zfsguid_enable=YES
+service zfsguid start
+.Ed
+.Pp
+Run in the foreground for debugging:
+.Bd -literal -offset indent
+zfs-guid -f -c /usr/local/etc/zfs-gui.conf
+.Ed
+.Sh SEE ALSO
+.Xr zfs 8 ,
+.Xr zpool 8 ,
+.Xr bectl 8 ,
+.Xr getpeereid 2 ,
+.Xr execv 3
+.Sh AUTHORS
+ZFS-GUI project.

@@ -1,0 +1,9 @@
+[Icon Theme]
+Name=ZfsGui
+Comment=Built-in icons for ZFS GUI
+Directories=scalable/actions
+
+[scalable/actions]
+Size=24
+Type=Scalable
+Context=Actions

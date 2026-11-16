@@ -1,0 +1,8 @@
+#!/bin/sh
+# +PRE_DEINSTALL - 卸载前停止并禁用后台服务
+set -e
+
+service zfsguid stop >/dev/null 2>&1 || true
+sysrc -x zfsguid_enable >/dev/null 2>&1 || true
+
+exit 0
