@@ -33,6 +33,7 @@ typedef struct
     GPtrArray *options;    /* ZgOpOption *  */
     GPtrArray *positional; /* char *        */
     char *io_path;         /* 重定向文件路径，可为 NULL */
+    gint io_fd;            /* 由 GUI 通过 SCM_RIGHTS 传入的 fd，-1 表示无 */
 } ZgOpRequest;
 
 ZgOpRequest *zg_op_request_new(void);

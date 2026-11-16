@@ -450,6 +450,30 @@ backup_unlink(const ZgOpRequest *request)
     return outcome;
 }
 
+static ZgOpOutcome *
+capsicum_send_stream(const ZgOpRequest *request)
+{
+    ZgOpOutcome *outcome;
+    const gchar *snapshot = request->positional->len > 0
+                                    ? g_ptr_array_index(request->positional, 0)
+                                    : NULL;
+
+    if (request->flags->len > 0 || request->options->len > 0 ||
+        snapshot == NULL || request->io_fd < 0)
+    {
+        outcome = outcome_new();
+        set_failure(outcome, 1,
+                    "Capsicum 模式：zfs.send 需要 GUI 通过 SCM_RIGHTS 传入文件 fd，"
+                    "且暂不支持增量/递归参数");
+        outcome->stdout_text = g_strdup("");
+        outcome->stderr_text = g_strdup("");
+        outcome->data_json = g_strdup("");
+        return outcome;
+    }
+
+    return zg_helper_send_stream(snapshot, request->io_fd);
+}
+
 ZgOpOutcome *
 zg_op_execute(const ZgOpDef *op,
               const ZgOpRequest *request,
@@ -468,6 +492,11 @@ zg_op_execute(const ZgOpDef *op,
         outcome = system_info(policy);
     else if (g_strcmp0(op->id, "system.arcstats") == 0)
         outcome = system_arcstats();
+    else if (zg_policy_capsicum_mode(policy) &&
+             g_strcmp0(op->id, "zfs.send") == 0)
+    {
+        outcome = capsicum_send_stream(request);
+    }
     else if (zg_policy_capsicum_mode(policy) && zg_helper_supports(op->id))
     {
         outcome = zg_helper_call(op, request);

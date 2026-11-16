@@ -38,6 +38,7 @@ zg_op_request_new(void)
     request->flags = g_ptr_array_new_with_free_func(g_free);
     request->options = g_ptr_array_new_with_free_func(option_free);
     request->positional = g_ptr_array_new_with_free_func(g_free);
+    request->io_fd = -1;
 
     return request;
 }

@@ -172,3 +172,38 @@ zgtest/recv@s1 出现
 - `receive_stream`（方向相反，fd 由 GUI 打开后传给 Helper）
 - 取消：客户端断开时 Helper 通过 socket EOF 终止 `zfs send`
 - 进度/状态机：目前 Helper 连接同步等待，长流会占用一个连接槽
+
+## 10. GUI → Daemon → Helper 全链路（send_stream）
+
+协议新增：
+
+- 请求 JSON 增加 `"has_fd": true`
+- 客户端在 JSON 帧之后用 `sendmsg` 发送 1 字节 + SCM_RIGHTS fd
+- 守护进程 `recvmsg(MSG_CMSG_CLOEXEC)` 接收，存入 `ZgOpRequest.io_fd`
+- `capsicum_mode` 下 `zfs.send` 走 `zg_helper_send_stream()`
+- Helper 收到 fd 后 fork `zfs send`，写入该 fd
+
+测试程序：`tests/send_stream_chain.py`（模拟 GUI）
+
+```
+python3 tests/send_stream_chain.py /path/zfs-gui.sock zgtest/data@s1 /tmp/chain.zfs
+```
+
+实测（能力模式守护进程 + 预连接 Helper）：
+
+```
+capsicum: 已预连接 5 个 Helper 通道
+已进入 Capsicum 能力模式
+应答 {'ok': True, 'code': 0}
+-rw------- 47400 /tmp/chain.zfs
+zfs receive zgtest/recv < /tmp/chain.zfs → 成功
+zgtest/recv@s1
+```
+
+文件由 **GUI/调用方** 以普通用户身份打开，daemon 与 Helper 都不解析该路径。
+
+### 尚未实现
+
+- 取消：客户端断开后 Helper 不会中止正在运行的 `zfs send`
+- 进度/COMPLETED 状态机：当前同步等待，长时间占用一个预连接槽
+- `receive_stream`：方向相反，尚未接入
