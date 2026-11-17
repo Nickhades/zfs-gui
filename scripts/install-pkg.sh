@@ -7,6 +7,7 @@
 #   sh scripts/install-pkg.sh --rebuild    # 先重新打包，再安装
 #   sh scripts/install-pkg.sh --dry-run    # 只打印将执行的操作
 #   sh scripts/install-pkg.sh --uninstall  # 卸载并停止服务
+#   sh scripts/install-pkg.sh --check      # 只检查依赖与运行环境
 #
 # 需要 root；脚本会自动通过 doas/sudo 提权。
 #
@@ -18,6 +19,7 @@ PKG_BIN=/usr/sbin/pkg
 DO_REBUILD=0
 DRY_RUN=0
 DO_UNINSTALL=0
+DO_CHECK=0
 ROOT_INSTALL=0
 PKG_FILE=""
 
@@ -36,6 +38,7 @@ for arg in "$@"; do
     --rebuild) DO_REBUILD=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --uninstall) DO_UNINSTALL=1 ;;
+    --check) DO_CHECK=1 ;;
     -h | --help)
         sed -n '2,14p' "$0"
         exit 0
@@ -65,12 +68,57 @@ find_pkg() {
     ls -t "$DIST"/zfs-gui-*.pkg 2>/dev/null | head -1
 }
 
+check_deps() {
+    missing=""
+
+    if ! "$PKG_BIN" info -e gtk4 >/dev/null 2>&1; then
+        missing="$missing gtk4"
+    fi
+    if ! "$PKG_BIN" info -e glib >/dev/null 2>&1; then
+        missing="$missing glib"
+    fi
+
+    if [ -n "$missing" ]; then
+        say "缺少运行依赖：$missing"
+        say "将安装：pkg install -y$missing"
+    else
+        say "运行依赖已满足：gtk4 / glib"
+    fi
+
+    command -v service >/dev/null 2>&1 || die "缺少 service 命令"
+    command -v sysrc >/dev/null 2>&1 || die "缺少 sysrc 命令"
+
+    [ -x /sbin/zfs ] || [ -x /usr/local/sbin/zfs ] || die "未找到 zfs 命令"
+    [ -e /dev/zfs ] || die "未找到 /dev/zfs（ZFS 内核模块未加载？）"
+    [ -f /etc/pam.d/zfs-gui ] && say "PAM 配置已就绪：/etc/pam.d/zfs-gui" || true
+}
+
 install_now() {
     [ -n "$PKG_FILE" ] || die "没有可安装的 pkg 文件"
     [ -f "$PKG_FILE" ] || die "安装包不存在：$PKG_FILE"
 
-    say "==> 安装运行依赖（gtk4 / glib）"
-    ASSUME_ALWAYS_YES=yes "$PKG_BIN" install -y gtk4 glib >/dev/null
+    say "==> 检查运行依赖"
+    missing=""
+
+    if ! "$PKG_BIN" info -e gtk4 >/dev/null 2>&1; then
+        missing="$missing gtk4"
+    fi
+    if ! "$PKG_BIN" info -e glib >/dev/null 2>&1; then
+        missing="$missing glib"
+    fi
+
+    if [ -n "$missing" ]; then
+        say "    安装缺失依赖：$missing"
+        ASSUME_ALWAYS_YES=yes "$PKG_BIN" install -y $missing || die "依赖安装失败"
+    else
+        say "    gtk4 / glib 已安装"
+    fi
+
+    command -v service >/dev/null 2>&1 || die "缺少 service 命令"
+    command -v sysrc >/dev/null 2>&1 || die "缺少 sysrc 命令"
+
+    [ -x /sbin/zfs ] || [ -x /usr/local/sbin/zfs ] || die "未找到 zfs 命令"
+    [ -e /dev/zfs ] || die "未找到 /dev/zfs"
 
     say "==> 安装 $PKG_FILE"
     ASSUME_ALWAYS_YES=yes "$PKG_BIN" install -y "$PKG_FILE"
@@ -139,9 +187,17 @@ fi
 
 PKG_FILE=$(find_pkg || true)
 
+if [ "$DO_CHECK" -eq 1 ]; then
+    say "==> 检查安装包：${PKG_FILE:-（尚未构建）}"
+    check_deps
+    say "检查完成"
+    exit 0
+fi
+
 if [ "$DRY_RUN" -eq 1 ]; then
     say "==> 安装包：${PKG_FILE:-（待构建）}"
     say "==> 将执行："
+    say "    检查 gtk4 / glib；缺失时 pkg install -y gtk4 glib"
     say "    pkg install -y ${PKG_FILE:-dist/zfs-gui-*.pkg}"
     say "    sysrc zfsguid_enable=YES"
     say "    service zfsguid restart"
