@@ -57,14 +57,22 @@ DESTDIR="$STAGE" meson install -C "$BUILD_DIR" --no-rebuild >/dev/null
 echo "==> 生成元数据"
 rm -rf "$META"
 mkdir -p "$META"
-sed -e "s|@VERSION@|$VERSION|g" \
-    -e "s|@ABI@|$ABI|g" \
-    -e "s|@GTK4_VERSION@|$GTK4_VERSION|g" \
-    -e "s|@GLIB_VERSION@|$GLIB_VERSION|g" \
-    packaging/+MANIFEST.in > "$META/+MANIFEST"
-cp packaging/+POST_INSTALL "$META/+POST_INSTALL"
-cp packaging/+PRE_DEINSTALL "$META/+PRE_DEINSTALL"
-chmod 755 "$META/+POST_INSTALL" "$META/+PRE_DEINSTALL"
+{
+    sed -e "s|@VERSION@|$VERSION|g" \
+        -e "s|@ABI@|$ABI|g" \
+        -e "s|@GTK4_VERSION@|$GTK4_VERSION|g" \
+        -e "s|@GLIB_VERSION@|$GLIB_VERSION|g" \
+        packaging/+MANIFEST.in
+    echo ""
+    echo "scripts: {"
+    echo "post-install: <<EOPOST"
+    cat packaging/+POST_INSTALL
+    echo "EOPOST"
+    echo "pre-deinstall: <<EOPRE"
+    cat packaging/+PRE_DEINSTALL
+    echo "EOPRE"
+    echo "}"
+} > "$META/+MANIFEST"
 
 PLIST="$META/plist"
 ( cd "$STAGE" && find . \( -type f -o -type l \) -print | sed 's|^\.||' | sort ) > "$PLIST"

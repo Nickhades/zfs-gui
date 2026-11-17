@@ -77,7 +77,10 @@ install_now() {
 
     say "==> 启用并启动后台服务"
     sysrc zfsguid_enable=YES >/dev/null
-    service zfsguid restart >/dev/null 2>&1 || service zfsguid start >/dev/null 2>&1 || true
+    service zfsguid stop >/dev/null 2>&1 || true
+    rm -f /var/run/zfs-gui.pid
+    rm -f /var/run/zfs-gui/zfs-gui.sock
+    service zfsguid start >/dev/null 2>&1 || true
 
     i=0
     while [ ! -S /var/run/zfs-gui/zfs-gui.sock ]; do

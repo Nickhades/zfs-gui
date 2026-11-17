@@ -1,13 +1,26 @@
 #!/bin/sh
-# +POST_INSTALL - 安装后启用并重启后台服务
+# +POST_INSTALL - 安装后启用并启动后台服务
 set -e
 
 sysrc zfsguid_enable=YES >/dev/null 2>&1 || true
 
-if service zfsguid status >/dev/null 2>&1; then
-    service zfsguid restart >/dev/null 2>&1 || true
-else
-    service zfsguid start >/dev/null 2>&1 || true
-fi
+# 先停掉旧实例，清理旧 pid/socket，避免 restart 与旧 socket 竞态。
+service zfsguid stop >/dev/null 2>&1 || true
+rm -f /var/run/zfs-gui.pid
+rm -f /var/run/zfs-gui/zfs-gui.sock
+
+service zfsguid start >/dev/null 2>&1 || true
+
+i=0
+while [ ! -S /var/run/zfs-gui/zfs-gui.sock ]; do
+    i=$((i + 1))
+    if [ "$i" -gt 50 ]; then
+        echo "警告: zfsguid 未能在 5 秒内启动，请检查："
+        echo "  service zfsguid status"
+        echo "  tail -n 30 /var/log/zfs-guid.log"
+        break
+    fi
+    sleep 0.1
+done
 
 exit 0

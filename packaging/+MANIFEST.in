@@ -38,10 +38,11 @@ deps: {
 message: <<EOD
 ZFS 管理工具已安装。
 
-  服务：sysrc zfsguid_enable=YES 已设置，并已尝试启动
-        service zfsguid status
+  服务：sysrc zfsguid_enable=YES 已设置
+        安装后请运行：service zfsguid start
+        （使用 scripts/install-pkg.sh 会自动启动）
   配置：/usr/local/etc/zfs-gui.conf
-  认证：/usr/local/etc/pam.d/zfs-gui
+  认证：/etc/pam.d/zfs-gui
   程序：zfs-gui（桌面菜单或命令启动）
 
 注意：zfs-guid 必须以 root 运行；普通用户需在 wheel 组，或在
