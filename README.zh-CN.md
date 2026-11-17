@@ -7,16 +7,26 @@
 既保证可用性，也避免把 `zpool`/`zfs` 的全部权限暴露给图形界面进程。
 
 ```
-┌──────────────────────────┐        Unix socket         ┌────────────────────────┐
-│  zfs-gui（GTK4，普通用户）│  ───────────────────────▶  │ zfs-guid（root，守护） │
-│  界面 / 解析 / 表单        │   4 字节长度 + JSON 帧      │ 白名单校验 → execv()   │
-└──────────────────────────┘                            └───────────┬────────────┘
-                                                                    │ argv
-                                                        ┌───────────▼────────────┐
-                                                        │ /sbin/zpool  /sbin/zfs │
-                                                        │ /sbin/bectl  /usr/sbin/jls │
-                                                        └────────────────────────┘
+┌──────────────────────────────┐
+│ zfs-gui（GTK4，普通用户）     │
+│ 界面 / 表单 / 进度 / 取消     │
+└──────────────┬───────────────┘
+               │ AF_UNIX，4 字节长度 + JSON
+┌──────────────▼───────────────┐
+│ zfs-guid（root）              │
+│ 白名单 / PAM / 审计           │
+│ cap_enter() + kqueue task     │
+└──────────────┬───────────────┘
+               │ 预连接 Helper 池（5）
+┌──────────────▼───────────────┐
+│ zfs-helper（root）            │
+│ mount / send / receive        │
+└──────────────────────────────┘
 ```
+
+> **v1.1.0 架构更新**：daemon 已进入 Capsicum；send/receive 由 kqueue
+> 任务驱动，GUI 通过 SCM_RIGHTS 传文件 fd，Helper 负责实际流读写；
+> 支持进度帧和精确取消。旧章节中的命令执行层仍用于兼容路径。
 
 ## 界面预览
 
@@ -30,7 +40,7 @@
 | **命令中心（87 项受控操作）** | **操作帮助（全部功能说明）** |
 | ![命令中心](docs/screenshot-command-center.png) | ![操作帮助](docs/screenshot-help.png) |
 
-> 截图使用 Adwaita 浅色主题、全局粗体；界面文字为中文。
+> 截图使用应用内固定绿色浅色主题 + 全局粗体；界面文字为中文。
 
 ---
 
@@ -94,7 +104,7 @@
 1. **socket 文件权限**：默认 `root:wheel 0660`，目录 `0700`（不再使用 `/tmp`）。
 2. **对端身份校验**：`getpeereid(2)` 取到 uid/gid，按 `allowed_users` / `allowed_groups` 判定。
 3. **操作白名单**：请求必须是注册表中的操作 ID；开关、选项键、位置参数逐项校验；
-   **位置参数以 `-` 开头一律拒绝**，杜绝参数注入。最终只调用 `execv()`，**从不经过 shell**。
+   **位置参数以 `-` 开头一律拒绝**，杜绝参数注入。命令执行层只调用 `execv()`，**从不经过 shell**；流式 send/receive 使用 Helper + SCM_RIGHTS fd。
 4. **危险操作二次认证**：销毁、回滚、替换设备、导入导出、改密钥、委派权限等
    27 个操作执行前必须提交「管理员账号 + 密码」，守护进程用 **PAM** 重新验证，
    并要求该账号属于管理员集合（root / allowed_users / allowed_groups）。
@@ -151,6 +161,25 @@ meson setup build -Dgui=disabled
 ```
 
 ### 3.3 一键安装（推荐）
+
+**首选：直接安装 FreeBSD pkg 包**
+
+```sh
+sh scripts/install-pkg.sh
+```
+
+脚本会先检查 `gtk4` / `glib` / `zfs` / `/dev/zfs`，只安装缺失的运行时依赖，
+然后安装 `dist/zfs-gui-1.1.0.pkg`、清理 stale pid/socket、启动并验证服务。
+
+常用选项：
+
+```sh
+sh scripts/install-pkg.sh --check       # 只检查依赖与环境
+sh scripts/install-pkg.sh --rebuild     # 重新打包后安装
+sh scripts/install-pkg.sh --uninstall   # 卸载
+```
+
+**从源码构建安装**（需要 meson/ninja/clang）：
 
 ```sh
 su -c 'sh scripts/install.sh'
@@ -262,13 +291,13 @@ sh packaging/build-pkg.sh            # 编译 + 打包
 sh packaging/build-pkg.sh --no-build # 用现有构建产物打包
 ```
 
-产物：`dist/zfs-gui-1.0.0.pkg`。脚本会：以 `DESTDIR` 暂存安装 →
+产物：`dist/zfs-gui-1.1.0.pkg`。脚本会：以 `DESTDIR` 暂存安装 →
 生成 `+MANIFEST`（自动写入版本、ABI、gtk4/glib 依赖）→ 打包并校验文件。
 
 安装：
 
 ```sh
-sudo pkg add -f dist/zfs-gui-1.0.0.pkg
+sudo pkg add -f dist/zfs-gui-1.1.0.pkg
 ```
 
 卸载（`+PRE_DEINSTALL` 会自动停止并禁用服务）：
@@ -495,9 +524,9 @@ zfs-gui/
 │   └── zg-util.[ch]         # 格式化、名称校验
 ├── daemon/
 │   ├── zfs-guid.c           # 入口：参数、daemonize、pidfile
-│   ├── zg-server.c          # accept + fork per connection、getpeereid 鉴权
+│   ├── zg-server.c          # accept、capsicum、kqueue task、getpeereid 鉴权
 │   ├── zg-policy.c          # 配置文件与用户/组授权
-│   ├── zg-exec.c            # fork/execv、输出捕获、超时与进程组终止
+│   ├── zg-exec.c            # 命令执行/回退路径、输出捕获、超时与进程组终止
 │   ├── zg-ops.c             # 通用执行 + system.info / system.arcstats
 │   ├── zg-auth.c            # PAM 管理员二次认证、失败限速
 │   └── zg-log.c             # 前台 stderr / 后台 syslog

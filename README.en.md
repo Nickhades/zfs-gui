@@ -8,16 +8,27 @@ performed by a root daemon constrained by a strict whitelist. This keeps the
 `zpool`/`zfs` privileges out of the GUI process while remaining fully usable.
 
 ```
-┌──────────────────────────┐        Unix socket         ┌────────────────────────┐
-│  zfs-gui (GTK4, user)    │  ───────────────────────▶  │ zfs-guid (root, daemon)│
-│  UI / parsing / forms    │   4-byte length + JSON     │ whitelist → execv()    │
-└──────────────────────────┘                            └───────────┬────────────┘
-                                                                    │ argv
-                                                        ┌───────────▼────────────┐
-                                                        │ /sbin/zpool  /sbin/zfs │
-                                                        │ /sbin/bectl  /usr/sbin/jls │
-                                                        └────────────────────────┘
+┌──────────────────────────────┐
+│ zfs-gui (GTK4, user)         │
+│ UI / forms / progress/cancel │
+└──────────────┬───────────────┘
+               │ AF_UNIX, 4-byte length + JSON
+┌──────────────▼───────────────┐
+│ zfs-guid (root)              │
+│ whitelist / PAM / audit      │
+│ cap_enter() + kqueue task    │
+└──────────────┬───────────────┘
+               │ preconnected helper pool (5)
+┌──────────────▼───────────────┐
+│ zfs-helper (root)            │
+│ mount / send / receive       │
+└──────────────────────────────┘
 ```
+
+> **v1.1.0 architecture update**: the daemon now enters Capsicum; send and
+> receive run as kqueue tasks, the GUI passes file descriptors via
+> SCM_RIGHTS, and the helper performs the stream I/O with progress and
+> precise cancellation. The legacy exec path remains only as a fallback.
 
 ## Screenshots
 
@@ -31,8 +42,8 @@ performed by a root daemon constrained by a strict whitelist. This keeps the
 | **Command center (87 controlled operations)** | **Help (every feature documented)** |
 | ![Command center](docs/screenshot-command-center.png) | ![Help](docs/screenshot-help.png) |
 
-> Screenshots use the fixed Adwaita light theme with global bold text; the UI
-> language is Chinese.
+> Screenshots use the app's fixed green light palette with global bold text;
+> the UI language is Chinese.
 
 ---
 
@@ -105,7 +116,7 @@ administrator authorization dialog first.
 3. **Operation whitelist**: the request must be a registry operation ID; flags,
    option keys and positional values are validated one by one. **Positional
    values starting with `-` are rejected**, preventing argument injection.
-   Execution always uses `execv()`, **never a shell**.
+   The exec path uses `execv()`, **never a shell**; streaming send/receive uses the helper + SCM_RIGHTS fds.
 4. **Re-authentication for dangerous operations**: 27 operations (destroy,
    rollback, replace, import/export, change-key, delegation, …) require an
    administrator account and password. The daemon validates it through **PAM**
@@ -165,6 +176,26 @@ meson setup build -Dgui=disabled
 ```
 
 ### 3.3 One-click install (recommended)
+
+**Preferred: install the FreeBSD pkg**
+
+```sh
+sh scripts/install-pkg.sh
+```
+
+It checks `gtk4` / `glib` / `zfs` / `/dev/zfs`, installs only missing runtime
+dependencies, installs `dist/zfs-gui-1.1.0.pkg`, clears stale pid/socket
+files, then starts and verifies the daemon.
+
+Options:
+
+```sh
+sh scripts/install-pkg.sh --check       # dependency/environment check only
+sh scripts/install-pkg.sh --rebuild     # rebuild package, then install
+sh scripts/install-pkg.sh --uninstall   # uninstall
+```
+
+**Build from source** (requires meson/ninja/clang):
 
 ```sh
 su -c 'sh scripts/install.sh'
@@ -283,14 +314,14 @@ sh packaging/build-pkg.sh            # build + package
 sh packaging/build-pkg.sh --no-build # package existing build output
 ```
 
-Output: `dist/zfs-gui-1.0.0.pkg`. The script stages the install with `DESTDIR`,
+Output: `dist/zfs-gui-1.1.0.pkg`. The script stages the install with `DESTDIR`,
 generates `+MANIFEST` (version, ABI, gtk4/glib dependencies) and creates the
 package.
 
 Install / remove:
 
 ```sh
-sudo pkg add -f dist/zfs-gui-1.0.0.pkg
+sudo pkg add -f dist/zfs-gui-1.1.0.pkg
 sudo pkg delete zfs-gui
 ```
 
@@ -525,9 +556,9 @@ zfs-gui/
 │   └── zg-util.[ch]         # formatting and name validation
 ├── daemon/
 │   ├── zfs-guid.c           # entry point: options, daemonize, pidfile
-│   ├── zg-server.c          # accept + fork per connection, getpeereid auth
+│   ├── zg-server.c          # accept, Capsicum, kqueue task, getpeereid auth
 │   ├── zg-policy.c          # configuration and user/group authorization
-│   ├── zg-exec.c            # fork/execv, output capture, timeout, process group kill
+│   ├── zg-exec.c            # exec/fallback path, output capture, timeout, process group kill
 │   ├── zg-ops.c             # generic execution + system.info / system.arcstats
 │   ├── zg-auth.c            # PAM re-authentication and failure rate limiting
 │   └── zg-log.c             # stderr in foreground / syslog in background
