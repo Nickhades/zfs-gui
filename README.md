@@ -38,10 +38,13 @@ re-authentication for dangerous actions.
 ## Quick start
 
 ```sh
-# FreeBSD package
-sudo pkg add -f dist/zfs-gui-1.0.0.pkg
+# 一键安装（自动安装依赖、pkg 包、启动服务）
+sh scripts/install-pkg.sh
 
-# or build from source
+# 或手动安装
+sudo pkg install -y dist/zfs-gui-1.0.0.pkg
+
+# 从源码构建并安装
 sh scripts/install.sh
 ```
 
