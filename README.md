@@ -217,7 +217,9 @@ sh packaging/build-pkg.sh
 
 ## 下载
 
-- 安装包：`dist/zfs-gui-1.1.0.pkg`
-- 源码包：`dist/zfs-gui-1.1.0-src.tar.zst`
+- GitHub Release：<https://github.com/Nickhades/zfs-gui/releases/tag/v1.1.0>
+- 安装包：`zfs-gui-1.1.0.pkg`（Release 资产）
+- 源码包：`zfs-gui-1.1.0-src.tar.zst`（Release 资产）
+- 本地构建产物：`dist/zfs-gui-1.1.0.pkg`
 - 版本：v1.1.0
 - 许可：BSD-2-Clause
